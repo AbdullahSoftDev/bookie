@@ -435,7 +435,10 @@
 			<TextInput bind:value={form.taxAmount} label={t('incomingInvoices.taxAmount')} placeholder="0.00" />
 			<DisplayField value="{grossAmount()} €" label={t('incomingInvoices.grossAmount')} />
 			<div class="md:col-span-2">
-				<FileUpload bind:files={uploadFiles} label={t('incomingInvoices.uploadFile')} accept=".pdf,.png,.jpg,.jpeg,.webp" />
+				<FileUpload bind:files={uploadFiles} label={t('incomingInvoices.uploadFile')} accept=".pdf,.xml,.png,.jpg,.jpeg,.webp" />
+			</div>
+			<div class="md:col-span-2">
+				<EInvoicePreview files={uploadFiles} onapply={applyEInvoice} />
 			</div>
 			<div class="md:col-span-2">
 				<TextInput bind:value={form.notes} label={t('common.notes')} placeholder={t('incomingInvoices.optionalNotes')} />
