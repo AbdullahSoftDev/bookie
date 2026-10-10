@@ -5,6 +5,10 @@ import {
   generateInvoiceHtml,
   type InvoicePdfData,
 } from "../../../src/lib/pdf/invoice-pdf";
+import {
+  computeInvoiceTotals,
+  toCents,
+} from "../../../src/lib/shared/invoice-totals";
 import { formatCents } from "../../../src/lib/shared/money";
 
 function makeInvoice(overrides: Partial<InvoicePdfData> = {}): InvoicePdfData {
@@ -165,4 +169,74 @@ describe("invoice formatting helpers", () => {
     expect(fmtNumber(1234.5, "de-DE")).toBe("1.234,5");
     expect(fmtNumber(1234.5, "en-US")).toBe("1,234.5");
   });
+});
+
+describe("computeInvoiceTotals", () => {
+  const line = (
+    quantity: string,
+    unit_price_net: string,
+    tax_rate: string,
+  ) => ({
+    quantity,
+    unit_price_net,
+    tax_rate,
+  });
+  const cents = (items: ReturnType<typeof line>[]) => {
+    const t = computeInvoiceTotals(items);
+    return {
+      net: toCents(t.subtotal),
+      groups: t.taxGroups.map((g) => [
+        g.rate,
+        toCents(g.netAmount),
+        toCents(g.amount),
+      ]),
+      vat: toCents(t.taxTotal),
+      gross: toCents(t.grossTotal),
+    };
+  };
+
+  test.each([
+    { rate: "0", vat: 0, gross: 10000 },
+    { rate: "7", vat: 700, gross: 10700 },
+    { rate: "19", vat: 1900, gross: 11900 },
+  ])("computes net, VAT and gross for $rate% VAT", ({ rate, vat, gross }) => {
+    expect(cents([line("1", "100", rate)])).toEqual({
+      net: 10000,
+      groups: [[Number(rate), 10000, vat]],
+      vat,
+      gross,
+    });
+  });
+
+  test("groups multiple line items by VAT rate", () => {
+    expect(
+      cents([
+        line("2", "45", "7"),
+        line("1", "110", "19"),
+        line("3", "10", "19"),
+      ]),
+    ).toEqual({
+      net: 23000,
+      groups: [
+        [7, 9000, 630],
+        [19, 14000, 2660],
+      ],
+      vat: 3290,
+      gross: 26290,
+    });
+  });
+
+  test.each([
+    { price: "10.05", qty: "1", rate: "19", vat: 191, gross: 1196 }, // 1.9095
+    { price: "0.35", qty: "3", rate: "19", vat: 20, gross: 125 }, // 0.1995, float 1.0499..
+    { price: "0.5", qty: "1", rate: "7", vat: 4, gross: 54 }, // 0.035 half-up
+    { price: "0.07", qty: "1", rate: "7", vat: 0, gross: 7 }, // 0.0049
+  ])(
+    "rounds $qty x $price at $rate% to the nearest cent",
+    ({ price, qty, rate, vat, gross }) => {
+      const r = cents([line(qty, price, rate)]);
+      expect(r.vat).toBe(vat);
+      expect(r.gross).toBe(gross);
+    },
+  );
 });
