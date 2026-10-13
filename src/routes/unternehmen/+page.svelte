@@ -353,7 +353,7 @@
 						<div class="max-h-[520px] overflow-y-auto">
 							{#each filteredCustomers as customer (customer.id)}
 								<div
-									class="table-row hover:bg-zinc-50 dark:hover:bg-zinc-700/30"
+									class="data-row hover:bg-zinc-50 dark:hover:bg-zinc-700/30"
 									style="grid-template-columns: 1.4fr 0.8fr 1fr 0.6fr 0.8fr 1.4fr 0.9fr 0.9fr 0.9fr 152px; min-height: 48px"
 								>
 									{#if editingCustomerId === customer.id}

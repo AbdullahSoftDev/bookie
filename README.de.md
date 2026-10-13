@@ -23,11 +23,14 @@ Eine kostenlose Offline-Alternative zu Abo-Rechnungsprogrammen wie lexoffice ode
 ### Warum Bookie?
 
 - 🧾 Rechnungen schreiben mit länderspezifischen Pflichtangaben (Profile für DE, AT, CH, FR, NL, US), inklusive Kleinunternehmer-Hinweis
+- 🎨 Personalisierte Rechnungs-PDFs: eigenes Logo hochladen, PDF-Vorschau vor dem Versand
 - 🔒 100 % lokal: Ihre Buchhaltung bleibt auf Ihrem Rechner (SQLite)
 - 📊 Übersicht mit Umsatz sowie Gewinn und Verlust
 - ⏱ Zeiterfassung eingebaut
 - 💾 Backups, optional mit S3-Synchronisierung
 - 🪶 Winziger Installer (ca. 6 MB), gebaut mit Tauri + Svelte
+
+<p align="center"><img src="docs/screenshots/new-invoice-pdf-preview.jpg" alt="Neue Rechnung mit PDF-Vorschau" width="800"></p>
 
 ## Download & Installation
 
