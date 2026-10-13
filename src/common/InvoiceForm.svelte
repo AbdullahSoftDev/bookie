@@ -19,6 +19,7 @@
 	import { save } from '@tauri-apps/plugin-dialog';
 	import { t, LOCALE_LABELS, type Locale } from '$lib/i18n';
 	import { LEGAL_COUNTRIES, type LegalCountry } from '$lib/legal';
+	import { computeInvoiceTotals, lineTotal, toCents } from '$lib/shared/invoice-totals';
 
 	type LineItem = {
 		id?: number;
@@ -147,38 +148,16 @@
 		return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 	}
 
-	function lineTotal(item: LineItem): number {
-		return (parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price_net) || 0);
-	}
-
-	// Conversion at the PDF boundary: the form holds string-typed amounts and
-	// computes totals as floats. The PDF generator (DAT-1.c) consumes integer
-	// cents only. The form-side write path will move to cents in DAT-1.d (#54);
-	// until then this is the only place a float -> cents conversion is needed.
-	function toCents(value: number): number {
-		return Number.isFinite(value) ? Math.round(value * 100) : 0;
-	}
-
-	const subtotal = $derived(items.reduce((sum, item) => sum + lineTotal(item), 0));
-
-	const taxGroups = $derived.by(() => {
-		const groups: Record<string, { label: string; rate: number; netAmount: number; amount: number }> = {};
-		for (const item of items) {
-			const rate = parseFloat(item.tax_rate) || 0;
-			const total = lineTotal(item);
-			const key = String(rate);
-			if (!groups[key]) {
-				const vat = vatTaxes.find((v) => v.goods_value_percent === rate);
-				groups[key] = { label: vat ? `${vat.name} ${rate}%` : `Steuer ${rate}%`, rate, netAmount: 0, amount: 0 };
-			}
-			groups[key].netAmount += total;
-			groups[key].amount += (total * rate) / 100;
-		}
-		return Object.values(groups);
-	});
-
-	const taxTotal = $derived(taxGroups.reduce((sum, g) => sum + g.amount, 0));
-	const grossTotal = $derived(subtotal + taxTotal);
+	const totals = $derived(computeInvoiceTotals(items));
+	const subtotal = $derived(totals.subtotal);
+	const taxGroups = $derived(
+		totals.taxGroups.map((g) => {
+			const vat = vatTaxes.find((v) => v.goods_value_percent === g.rate);
+			return { ...g, label: vat ? `${vat.name} ${g.rate}%` : `Steuer ${g.rate}%` };
+		})
+	);
+	const taxTotal = $derived(totals.taxTotal);
+	const grossTotal = $derived(totals.grossTotal);
 
 	const vatOptions = $derived(
 		vatTaxes.map((v) => ({ value: String(v.goods_value_percent), label: `${v.name} ${v.goods_value_percent}%` }))
