@@ -23,11 +23,14 @@ A free, offline alternative to subscription invoicing tools like lexoffice or se
 ### Why Bookie?
 
 - 🧾 Create invoices with country-specific mandatory fields (profiles for DE, AT, CH, FR, NL, US)
+- 🎨 Personalized invoice PDFs: upload your own logo, preview the PDF before sending
 - 🔒 100% local: your data stays on your machine (SQLite)
 - 📊 Dashboard for revenue and profit/loss
 - ⏱ Built-in time tracking
 - 💾 Backups, with optional S3 sync
 - 🪶 Tiny: ~6 MB, built with Tauri + Svelte
+
+<p align="center"><img src="docs/screenshots/new-invoice-pdf-preview.jpg" alt="Creating an invoice with PDF preview" width="800"></p>
 
 ## Download & install
 

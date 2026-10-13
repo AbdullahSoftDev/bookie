@@ -3833,7 +3833,23 @@ pub fn run() {
             boot_check
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|e| {
+            // No app/window exists yet (e.g. sql plugin rejected a DB migrated
+            // by a newer build), so use a bare native dialog before aborting.
+            let msg = e.to_string();
+            let hint = if msg.contains("missing in the resolved migrations") {
+                "Die Datenbank wurde von einer neueren Bookie-Version aktualisiert. \
+                 Bitte Bookie auf die neueste Version aktualisieren."
+            } else {
+                "Bookie konnte nicht gestartet werden."
+            };
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Error)
+                .set_title("Bookie")
+                .set_description(format!("{hint}\n\n{msg}"))
+                .show();
+            panic!("error while running tauri application: {msg}");
+        });
 }
 
 #[cfg(test)]
