@@ -5,8 +5,11 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-## [0.1.6] - 2026-10-14
+## [0.1.7] - 2026-10-14
 
+- Release pipeline: builds now upload into a single draft release and the release is only published after every
+  installer, signature and a complete updater manifest (`latest.json`) are verified (`scripts/release-check.sh`).
+  Fixes the v0.1.6 release, which was published with Linux files only.
 - Landing page and website: German page (`docs/de/`), language switch, screenshots, notice about unsigned installers.
 - E-Rechnung export: with `einvoice_format = zugferd`, "PDF speichern" now creates a ZUGFeRD / Factur-X
   (EN 16931 profile) hybrid PDF/A-3 with embedded `factur-x.xml`; `xrechnung` saves an XRechnung 3.0 XML.
@@ -16,6 +19,10 @@ All notable changes to this project are documented here. The format is based on
   `scripts/fetch-mustang.sh`. New dependency `@pdf-lib/fontkit`; Liberation Sans (OFL) and an sRGB ICC profile are bundled.
 - E-Rechnung: new per-invoice field "Leitweg-ID / Käuferreferenz" (BT-10, migration 0032, `invoices.buyer_reference`),
   frozen once the invoice is issued. XRechnung export now works when it is filled in.
+
+## [0.1.6] - withdrawn
+
+- Published incomplete (Linux files only) and removed. Its changes are part of 0.1.7.
 
 ## [0.1.5]
 
