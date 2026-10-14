@@ -5,8 +5,9 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-- Reworked `README.md`, added `README.de.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`.
-- E-Rechnung: incoming XRechnung and ZUGFeRD invoices can be read (see `docs/e-rechnung.md`).
+## [0.1.6] - 2026-10-14
+
+- Landing page and website: German page (`docs/de/`), language switch, screenshots, notice about unsigned installers.
 - E-Rechnung export: with `einvoice_format = zugferd`, "PDF speichern" now creates a ZUGFeRD / Factur-X
   (EN 16931 profile) hybrid PDF/A-3 with embedded `factur-x.xml`; `xrechnung` saves an XRechnung 3.0 XML.
   A pre-flight check (`src/lib/einvoice/validate.ts`) blocks export with a list of fixable problems, and the
@@ -15,6 +16,11 @@ All notable changes to this project are documented here. The format is based on
   `scripts/fetch-mustang.sh`. New dependency `@pdf-lib/fontkit`; Liberation Sans (OFL) and an sRGB ICC profile are bundled.
 - E-Rechnung: new per-invoice field "Leitweg-ID / Käuferreferenz" (BT-10, migration 0032, `invoices.buyer_reference`),
   frozen once the invoice is issued. XRechnung export now works when it is filled in.
+
+## [0.1.5]
+
+- Reworked `README.md`, added `README.de.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`.
+- E-Rechnung: incoming XRechnung and ZUGFeRD invoices can be read (see `docs/e-rechnung.md`).
 - Removed `package-lock.json`; Bun (`bun.lock`) is the only package manager.
 
 ## 2026-05-17

@@ -1,6 +1,6 @@
 [package]
 name = "bookie"
-version = "0.1.5"
+version = "0.1.6"
 description = "A Tauri App"
 authors = ["Ranel Karimov"]
 edition = "2021"
