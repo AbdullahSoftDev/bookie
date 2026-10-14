@@ -1,7 +1,7 @@
 /// <reference types="bun" />
 /**
  * COMP-3.d: End-to-end Mustangproject validator round-trip for the
- * ZUGFeRD (Factur-X 1.0 BASIC) hybrid PDF/A-3 and the standalone
+ * ZUGFeRD (Factur-X 1.0 EN 16931) hybrid PDF/A-3 and the standalone
  * XRechnung 3.0 CIUS XML produced by COMP-3.b / COMP-3.c.
  *
  * The decomposition's verification (`api_check`) is:
@@ -134,6 +134,8 @@ const xmlData: InvoiceXmlData = {
     bankIban: "DE89370400440532013000",
     bankBic: "COBADEFFXXX",
     bankAccountHolder: "Mustermann GmbH",
+    email: "kontakt@mustermann.example",
+    phone: "+49 30 1234567",
   },
   buyer: {
     name: "Beispiel AG",
@@ -142,7 +144,9 @@ const xmlData: InvoiceXmlData = {
     city: "München",
     countryCode: "DE",
     vatId: "DE987654321",
+    email: "einkauf@beispiel.example",
   },
+  buyerReference: "04011000-12345-34",
   items: [
     {
       position: 1,
@@ -301,7 +305,7 @@ describe("einvoice_validator field round-trip", () => {
       const xml = renderInvoiceXml(xmlData, format);
       if (format === "zugferd") {
         expect(xml).toContain(
-          "urn:cen.eu:en16931:2017#compliant#urn:factur-x.eu:1p0:basic",
+          "urn:cen.eu:en16931:2017",
         );
       } else {
         expect(xml).toContain(
@@ -395,6 +399,30 @@ describe("einvoice_validator mustang", () => {
     expect(result.exitCode).toBe(0);
     // Mustang's report XML contains a <summary status="valid|invalid"> line
     // even on exit 0 in some library versions; assert the explicit shape.
+    expect(result.stdout).not.toContain('status="invalid"');
+  });
+
+  test("ZUGFeRD with 0 % line and tax-number-only seller passes (category E, BR-CO-26)", async () => {
+    const mixed: InvoiceXmlData = {
+      ...xmlData,
+      seller: { ...xmlData.seller, vatId: undefined },
+      items: [
+        { position: 1, description: 'Beratung & "Test" <b>', quantity: 1.5, unit: "Std", unitPriceNetCents: 10000, lineTotalNetCents: 15000, taxRate: 19 },
+        { position: 2, description: "Export", quantity: 3, unit: "Stk", unitPriceNetCents: 3333, lineTotalNetCents: 9999, taxRate: 0 },
+      ],
+      taxGroups: [
+        { rate: 19, netAmountCents: 15000, amountCents: 2850 },
+        { rate: 0, netAmountCents: 9999, amountCents: 0 },
+      ],
+      totals: { netCents: 24999, taxCents: 2850, grossCents: 27849 },
+    };
+    const bytes = await createInvoicePdfA3({ pdfData, xmlData: mixed, format: "zugferd" });
+    const result = runMustangValidator({
+      jarPath: mustangJar,
+      sourcePath: writeFixture("RE-2026-002-zugferd-mixed.pdf", bytes),
+      reportName: "zugferd-mixed-validator-report.xml",
+    });
+    expect(result.exitCode).toBe(0);
     expect(result.stdout).not.toContain('status="invalid"');
   });
 

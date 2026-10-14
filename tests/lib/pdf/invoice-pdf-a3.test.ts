@@ -318,7 +318,7 @@ test("buildXmpMetadata for zugferd emits Factur-X namespace tags", () => {
     "<fx:DocumentFileName>factur-x.xml</fx:DocumentFileName>",
   );
   expect(xmp).toContain("<fx:Version>1.0</fx:Version>");
-  expect(xmp).toContain("<fx:ConformanceLevel>BASIC</fx:ConformanceLevel>");
+  expect(xmp).toContain("<fx:ConformanceLevel>EN 16931</fx:ConformanceLevel>");
 });
 
 test("buildXmpMetadata for xrechnung tags filename + conformance differently", () => {

@@ -173,12 +173,12 @@ describe("renderInvoiceXml", () => {
     expect(xml.trim().endsWith("</rsm:CrossIndustryInvoice>")).toBe(true);
   });
 
-  test("guideline ID switches between ZUGFeRD BASIC and XRechnung 3.0", () => {
+  test("guideline ID switches between ZUGFeRD EN 16931 and XRechnung 3.0", () => {
     const z = renderInvoiceXml(FIXTURE, "zugferd");
     const x = renderInvoiceXml(FIXTURE, "xrechnung");
 
     expect(z).toContain(
-      "<ram:ID>urn:cen.eu:en16931:2017#compliant#urn:factur-x.eu:1p0:basic</ram:ID>",
+      "<ram:ID>urn:cen.eu:en16931:2017</ram:ID>",
     );
     expect(x).toContain(
       "<ram:ID>urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0</ram:ID>",
@@ -186,7 +186,7 @@ describe("renderInvoiceXml", () => {
 
     // Sanity: the two XMLs should not share the same guideline.
     expect(z).not.toContain("xrechnung_3.0");
-    expect(x).not.toContain("factur-x.eu:1p0:basic");
+    expect(x).not.toContain("urn:cen.eu:en16931:2017</ram:ID>");
   });
 
   test("ExchangedDocument carries invoice number, type 380 and date 102", () => {

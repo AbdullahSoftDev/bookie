@@ -29,3 +29,6 @@ Cargo.lock
 !.github/
 !.github/**
 *.pdf
+
+# Mustang/KoSIT validator reports written by tests/lib/pdf/einvoice-validator.test.ts
+/target/
