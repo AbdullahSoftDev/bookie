@@ -85,6 +85,8 @@ export interface Invoice {
   s3_key: string | null;
   references_invoice_id: number | null;
   cancellation_reason: string | null;
+  /** E-invoice BT-10 (Leitweg-ID / PO number); mandatory for XRechnung. */
+  buyer_reference: string | null;
   /**
    * Zufluss date (§ 11 EStG): the day the payment arrived. Non-NULL exactly
    * while status = 'paid'; maintained by updateInvoiceStatus. Basis for the

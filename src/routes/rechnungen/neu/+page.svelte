@@ -37,6 +37,7 @@
 				due_date: data.dueDate || null,
 				service_period_start: data.servicePeriodStart || null,
 				service_period_end: data.servicePeriodEnd || null,
+				buyer_reference: data.buyerReference || null,
 				currency: data.currency,
 				net_cents: Math.round(data.subtotal * 100),
 				tax_cents: Math.round(data.taxTotal * 100),

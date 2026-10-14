@@ -5,7 +5,7 @@
  * Bookie supports today (selected via `settings_organization.einvoice_format`,
  * see COMP-3.a):
  *
- *   - 'zugferd'   — ZUGFeRD 2.x **BASIC** profile (Factur-X 1.0 BASIC)
+ *   - 'zugferd'   — ZUGFeRD 2.x **EN 16931** profile (Factur-X 1.0 "COMFORT")
  *   - 'xrechnung' — XRechnung 3.0 CIUS over CII
  *
  * Both flavours share the same CII schema; only the
@@ -33,6 +33,54 @@
  * surface.
  */
 export type XmlInvoiceFormat = "zugferd" | "xrechnung";
+
+/** UNTDID 5305 VAT category codes Bookie can emit. */
+export type TaxCategory = "S" | "Z" | "E" | "AE" | "K" | "G" | "O";
+
+/** BT-120 default for 0 % lines. ponytail: reverse charge / intra-EU supply (AE/K) need explicit data. */
+export const DEFAULT_EXEMPTION_REASON = "Umsatzsteuerfrei";
+
+/** Category for a rate when the caller does not set one. */
+export function taxCategoryFor(rate: number): TaxCategory {
+  return rate > 0 ? "S" : "E";
+}
+
+const UNIT_CODES: Record<string, string> = {
+  stk: "C62",
+  stück: "C62",
+  st: "C62",
+  pcs: "C62",
+  piece: "C62",
+  pauschal: "C62",
+  h: "HUR",
+  std: "HUR",
+  stunde: "HUR",
+  stunden: "HUR",
+  hour: "HUR",
+  hours: "HUR",
+  tag: "DAY",
+  tage: "DAY",
+  day: "DAY",
+  days: "DAY",
+  monat: "MON",
+  monate: "MON",
+  month: "MON",
+  km: "KMT",
+  kg: "KGM",
+  m: "MTR",
+  l: "LTR",
+};
+
+/**
+ * Map a free-text unit to a UN/ECE Rec. 20 code (BT-130 requires one).
+ * Already-valid codes pass through; unknown text falls back to C62 ("one").
+ */
+export function toUnitCode(unit: string | null | undefined): string {
+  const u = (unit ?? "").trim();
+  if (!u) return "C62";
+  if (/^[A-Z0-9]{2,3}$/.test(u)) return u;
+  return UNIT_CODES[u.toLowerCase()] ?? "C62";
+}
 
 /**
  * Input to `renderInvoiceXml`.
@@ -73,6 +121,9 @@ export interface InvoiceXmlData {
     bankIban?: string;
     bankBic?: string;
     bankAccountHolder?: string;
+    /** Seller contact (BG-6). Mandatory for XRechnung (BR-DE-2/5/6/7). */
+    email?: string;
+    phone?: string;
   };
 
   /** Buyer / recipient. */
@@ -83,13 +134,20 @@ export interface InvoiceXmlData {
     city: string;
     countryCode: string;
     vatId?: string;
+    /** Buyer electronic address (BT-49). Mandatory for XRechnung. */
+    email?: string;
   };
+
+  /** Optional billing / service period (BG-14), ISO dates. */
+  servicePeriodStart?: string;
+  servicePeriodEnd?: string;
 
   /** Line items. Position is 1-based and emitted as LineID. */
   items: Array<{
     position: number;
     description: string;
     quantity: number;
+    /** Free text ("Stk", "h") or a UN/ECE Rec. 20 code ("C62", "HUR"); see `toUnitCode`. */
     unit: string;
     unitPriceNetCents: number;
     lineTotalNetCents: number;
@@ -101,6 +159,10 @@ export interface InvoiceXmlData {
     rate: number;
     netAmountCents: number;
     amountCents: number;
+    /** Overrides the derived category (rate > 0 → S, else E). */
+    category?: TaxCategory;
+    /** BT-120. Required for every category except S; defaults to `DEFAULT_EXEMPTION_REASON` for E. */
+    exemptionReason?: string;
   }>;
 
   /** Document-level totals. All in minor currency units (cents). */
@@ -118,12 +180,15 @@ export interface InvoiceXmlData {
 /**
  * GuidelineSpecifiedDocumentContextParameter/ID per format.
  *
- * - ZUGFeRD 2.x BASIC (Factur-X 1.0 BASIC) — see Mustangproject's
- *   `Profiles.BASIC.getXMPVersion()` / `getXSDFile()` and the Factur-X spec.
+ * - ZUGFeRD 2.x EN 16931 (Factur-X 1.0 "COMFORT") — the plain EN 16931
+ *   guideline URN, see the Factur-X spec.
  * - XRechnung 3.0 CIUS over CII — see KoSIT's published guideline URN.
  */
+/** BT-23, required by the XRechnung CII schematron (PEPPOL-EN16931-R001). */
+const PEPPOL_BILLING_PROCESS = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0";
+
 const GUIDELINE_ID: Record<XmlInvoiceFormat, string> = {
-  zugferd: "urn:cen.eu:en16931:2017#compliant#urn:factur-x.eu:1p0:basic",
+  zugferd: "urn:cen.eu:en16931:2017",
   xrechnung:
     "urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0",
 };
@@ -138,12 +203,16 @@ const GUIDELINE_ID: Record<XmlInvoiceFormat, string> = {
  */
 export function escapeXml(s: string | null | undefined): string {
   if (s === null || s === undefined) return "";
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
+  return (
+    String(s)
+      // XML 1.0 forbids most control characters, even escaped.
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;")
+  );
 }
 
 /**
@@ -177,45 +246,73 @@ export function isoDateToCiiBasic(iso: string | null | undefined): string {
 // Renderer
 // ---------------------------------------------------------------------------
 
+const NL = "\n";
+
+function dateTime(tag: string, iso: string, indent: string): string {
+  return `${NL}${indent}<ram:${tag}><udt:DateTimeString format="102">${isoDateToCiiBasic(iso)}</udt:DateTimeString></ram:${tag}>`;
+}
+
 /**
  * Render a CII XML document for the given invoice and target e-invoice
  * format. The output is a complete, namespaced `<rsm:CrossIndustryInvoice>`
  * document beginning with `<?xml version="1.0" encoding="UTF-8"?>`.
  *
- * The structure follows the BASIC profile of CII (which XRechnung CIUS is a
- * subset of) and is intentionally minimal — only the elements actually
- * required by EN 16931 BASIC are emitted, so an empty optional field never
- * produces an empty `<ram:...></ram:...>` placeholder that some validators
- * reject.
+ * Optional fields that are empty never produce empty placeholder elements.
+ * Run `validateInvoiceXmlData` (src/lib/einvoice/validate.ts) first: this
+ * emitter writes what it is given.
  */
 export function renderInvoiceXml(
   data: InvoiceXmlData,
   format: XmlInvoiceFormat,
 ): string {
   const guideline = GUIDELINE_ID[format];
-  const issueDate102 = isoDateToCiiBasic(data.issueDate);
-  const deliveryDate102 = isoDateToCiiBasic(
-    data.deliveryDate || data.issueDate,
-  );
-  const dueDate102 = isoDateToCiiBasic(data.dueDate);
+  const processXml =
+    format === "xrechnung"
+      ? `${NL}\t\t<ram:BusinessProcessSpecifiedDocumentContextParameter><ram:ID>${PEPPOL_BILLING_PROCESS}</ram:ID></ram:BusinessProcessSpecifiedDocumentContextParameter>`
+      : "";
   const currency = escapeXml(data.currency);
+  const deliveryDate = data.deliveryDate || data.issueDate;
 
   const itemsXml = data.items.map((item) => renderLineItem(item)).join("");
   const taxXml = data.taxGroups.map((g) => renderTradeTax(g)).join("");
   const noteXml = data.notes
-    ? `\n\t\t<ram:IncludedNote><ram:Content>${escapeXml(data.notes)}</ram:Content></ram:IncludedNote>`
+    ? `${NL}\t\t<ram:IncludedNote><ram:Content>${escapeXml(data.notes)}</ram:Content></ram:IncludedNote>`
     : "";
 
-  const sellerVat = data.seller.vatId
-    ? `\n\t\t\t\t<ram:SpecifiedTaxRegistration><ram:ID schemeID="VA">${escapeXml(data.seller.vatId)}</ram:ID></ram:SpecifiedTaxRegistration>`
-    : "";
-  const sellerTax = data.seller.taxNumber
-    ? `\n\t\t\t\t<ram:SpecifiedTaxRegistration><ram:ID schemeID="FC">${escapeXml(data.seller.taxNumber)}</ram:ID></ram:SpecifiedTaxRegistration>`
-    : "";
+  const reg = (scheme: string, v: string) =>
+    `${NL}\t\t\t\t<ram:SpecifiedTaxRegistration><ram:ID schemeID="${scheme}">${escapeXml(v)}</ram:ID></ram:SpecifiedTaxRegistration>`;
+  const email = (v?: string) =>
+    v
+      ? `${NL}\t\t\t\t<ram:URIUniversalCommunication><ram:URIID schemeID="EM">${escapeXml(v)}</ram:URIID></ram:URIUniversalCommunication>`
+      : "";
+  const address = (p: InvoiceXmlData["seller"] | InvoiceXmlData["buyer"]) =>
+    `${NL}\t\t\t\t<ram:PostalTradeAddress>
+\t\t\t\t\t<ram:PostcodeCode>${escapeXml(p.postalCode)}</ram:PostcodeCode>
+\t\t\t\t\t<ram:LineOne>${escapeXml(p.street)}</ram:LineOne>
+\t\t\t\t\t<ram:CityName>${escapeXml(p.city)}</ram:CityName>
+\t\t\t\t\t<ram:CountryID>${escapeXml(p.countryCode)}</ram:CountryID>
+\t\t\t\t</ram:PostalTradeAddress>`;
 
-  const buyerVat = data.buyer.vatId
-    ? `\n\t\t\t\t<ram:SpecifiedTaxRegistration><ram:ID schemeID="VA">${escapeXml(data.buyer.vatId)}</ram:ID></ram:SpecifiedTaxRegistration>`
-    : "";
+  // BT-29: BR-CO-26 wants a seller identifier, legal id or VAT id. A seller
+  // with only a Steuernummer identifies by that.
+  const sellerId =
+    !data.seller.vatId && data.seller.taxNumber
+      ? `${NL}\t\t\t\t<ram:ID>${escapeXml(data.seller.taxNumber)}</ram:ID>`
+      : "";
+  const sellerContact =
+    data.seller.phone || data.seller.email
+      ? `${NL}\t\t\t\t<ram:DefinedTradeContact>
+\t\t\t\t\t<ram:PersonName>${escapeXml(data.seller.name)}</ram:PersonName>${
+          data.seller.phone
+            ? `${NL}\t\t\t\t\t<ram:TelephoneUniversalCommunication><ram:CompleteNumber>${escapeXml(data.seller.phone)}</ram:CompleteNumber></ram:TelephoneUniversalCommunication>`
+            : ""
+        }${
+          data.seller.email
+            ? `${NL}\t\t\t\t\t<ram:EmailURIUniversalCommunication><ram:URIID>${escapeXml(data.seller.email)}</ram:URIID></ram:EmailURIUniversalCommunication>`
+            : ""
+        }
+\t\t\t\t</ram:DefinedTradeContact>`
+      : "";
 
   const paymentMeansXml = data.seller.bankIban
     ? renderPaymentMeans(
@@ -226,117 +323,116 @@ export function renderInvoiceXml(
     : "";
 
   const buyerRefXml = data.buyerReference
-    ? `\n\t\t\t<ram:BuyerReference>${escapeXml(data.buyerReference)}</ram:BuyerReference>`
+    ? `${NL}\t\t\t<ram:BuyerReference>${escapeXml(data.buyerReference)}</ram:BuyerReference>`
     : "";
 
-  const dueDateXml = dueDate102
-    ? `\n\t\t\t<ram:SpecifiedTradePaymentTerms>\n\t\t\t\t<ram:DueDateDateTime><udt:DateTimeString format="102">${dueDate102}</udt:DateTimeString></ram:DueDateDateTime>\n\t\t\t</ram:SpecifiedTradePaymentTerms>`
+  const periodXml =
+    data.servicePeriodStart && data.servicePeriodEnd
+      ? `${NL}\t\t\t<ram:BillingSpecifiedPeriod>${dateTime("StartDateTime", data.servicePeriodStart, "\t\t\t\t")}${dateTime("EndDateTime", data.servicePeriodEnd, "\t\t\t\t")}${NL}\t\t\t</ram:BillingSpecifiedPeriod>`
+      : "";
+
+  const dueDateXml = data.dueDate
+    ? `${NL}\t\t\t<ram:SpecifiedTradePaymentTerms>${dateTime("DueDateDateTime", data.dueDate, "\t\t\t\t")}${NL}\t\t\t</ram:SpecifiedTradePaymentTerms>`
     : "";
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100" xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100" xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100" xmlns:qdt="urn:un:unece:uncefact:data:standard:QualifiedDataType:100">
-	<rsm:ExchangedDocumentContext>
-		<ram:GuidelineSpecifiedDocumentContextParameter>
-			<ram:ID>${escapeXml(guideline)}</ram:ID>
-		</ram:GuidelineSpecifiedDocumentContextParameter>
-	</rsm:ExchangedDocumentContext>
-	<rsm:ExchangedDocument>
-		<ram:ID>${escapeXml(data.invoiceNumber)}</ram:ID>
-		<ram:TypeCode>380</ram:TypeCode>
-		<ram:IssueDateTime>
-			<udt:DateTimeString format="102">${issueDate102}</udt:DateTimeString>
-		</ram:IssueDateTime>${noteXml}
-	</rsm:ExchangedDocument>
-	<rsm:SupplyChainTradeTransaction>${itemsXml}
-		<ram:ApplicableHeaderTradeAgreement>${buyerRefXml}
-			<ram:SellerTradeParty>
-				<ram:Name>${escapeXml(data.seller.name)}</ram:Name>
-				<ram:PostalTradeAddress>
-					<ram:PostcodeCode>${escapeXml(data.seller.postalCode)}</ram:PostcodeCode>
-					<ram:LineOne>${escapeXml(data.seller.street)}</ram:LineOne>
-					<ram:CityName>${escapeXml(data.seller.city)}</ram:CityName>
-					<ram:CountryID>${escapeXml(data.seller.countryCode)}</ram:CountryID>
-				</ram:PostalTradeAddress>${sellerVat}${sellerTax}
-			</ram:SellerTradeParty>
-			<ram:BuyerTradeParty>
-				<ram:Name>${escapeXml(data.buyer.name)}</ram:Name>
-				<ram:PostalTradeAddress>
-					<ram:PostcodeCode>${escapeXml(data.buyer.postalCode)}</ram:PostcodeCode>
-					<ram:LineOne>${escapeXml(data.buyer.street)}</ram:LineOne>
-					<ram:CityName>${escapeXml(data.buyer.city)}</ram:CityName>
-					<ram:CountryID>${escapeXml(data.buyer.countryCode)}</ram:CountryID>
-				</ram:PostalTradeAddress>${buyerVat}
-			</ram:BuyerTradeParty>
-		</ram:ApplicableHeaderTradeAgreement>
-		<ram:ApplicableHeaderTradeDelivery>
-			<ram:ActualDeliverySupplyChainEvent>
-				<ram:OccurrenceDateTime>
-					<udt:DateTimeString format="102">${deliveryDate102}</udt:DateTimeString>
-				</ram:OccurrenceDateTime>
-			</ram:ActualDeliverySupplyChainEvent>
-		</ram:ApplicableHeaderTradeDelivery>
-		<ram:ApplicableHeaderTradeSettlement>
-			<ram:InvoiceCurrencyCode>${currency}</ram:InvoiceCurrencyCode>${paymentMeansXml}${taxXml}${dueDateXml}
-			<ram:SpecifiedTradeSettlementHeaderMonetarySummation>
-				<ram:LineTotalAmount>${formatCentsAsAmount(data.totals.netCents)}</ram:LineTotalAmount>
-				<ram:TaxBasisTotalAmount>${formatCentsAsAmount(data.totals.netCents)}</ram:TaxBasisTotalAmount>
-				<ram:TaxTotalAmount currencyID="${currency}">${formatCentsAsAmount(data.totals.taxCents)}</ram:TaxTotalAmount>
-				<ram:GrandTotalAmount>${formatCentsAsAmount(data.totals.grossCents)}</ram:GrandTotalAmount>
-				<ram:DuePayableAmount>${formatCentsAsAmount(data.totals.grossCents)}</ram:DuePayableAmount>
-			</ram:SpecifiedTradeSettlementHeaderMonetarySummation>
-		</ram:ApplicableHeaderTradeSettlement>
-	</rsm:SupplyChainTradeTransaction>
+\t<rsm:ExchangedDocumentContext>${processXml}
+\t\t<ram:GuidelineSpecifiedDocumentContextParameter>
+\t\t\t<ram:ID>${escapeXml(guideline)}</ram:ID>
+\t\t</ram:GuidelineSpecifiedDocumentContextParameter>
+\t</rsm:ExchangedDocumentContext>
+\t<rsm:ExchangedDocument>
+\t\t<ram:ID>${escapeXml(data.invoiceNumber)}</ram:ID>
+\t\t<ram:TypeCode>380</ram:TypeCode>
+\t\t<ram:IssueDateTime>
+\t\t\t<udt:DateTimeString format="102">${isoDateToCiiBasic(data.issueDate)}</udt:DateTimeString>
+\t\t</ram:IssueDateTime>${noteXml}
+\t</rsm:ExchangedDocument>
+\t<rsm:SupplyChainTradeTransaction>${itemsXml}
+\t\t<ram:ApplicableHeaderTradeAgreement>${buyerRefXml}
+\t\t\t<ram:SellerTradeParty>${sellerId}
+\t\t\t\t<ram:Name>${escapeXml(data.seller.name)}</ram:Name>${sellerContact}${address(data.seller)}${email(data.seller.email)}${data.seller.vatId ? reg("VA", data.seller.vatId) : ""}${data.seller.taxNumber ? reg("FC", data.seller.taxNumber) : ""}
+\t\t\t</ram:SellerTradeParty>
+\t\t\t<ram:BuyerTradeParty>
+\t\t\t\t<ram:Name>${escapeXml(data.buyer.name)}</ram:Name>${address(data.buyer)}${email(data.buyer.email)}${data.buyer.vatId ? reg("VA", data.buyer.vatId) : ""}
+\t\t\t</ram:BuyerTradeParty>
+\t\t</ram:ApplicableHeaderTradeAgreement>
+\t\t<ram:ApplicableHeaderTradeDelivery>
+\t\t\t<ram:ActualDeliverySupplyChainEvent>
+\t\t\t\t<ram:OccurrenceDateTime>
+\t\t\t\t\t<udt:DateTimeString format="102">${isoDateToCiiBasic(deliveryDate)}</udt:DateTimeString>
+\t\t\t\t</ram:OccurrenceDateTime>
+\t\t\t</ram:ActualDeliverySupplyChainEvent>
+\t\t</ram:ApplicableHeaderTradeDelivery>
+\t\t<ram:ApplicableHeaderTradeSettlement>
+\t\t\t<ram:PaymentReference>${escapeXml(data.invoiceNumber)}</ram:PaymentReference>
+\t\t\t<ram:InvoiceCurrencyCode>${currency}</ram:InvoiceCurrencyCode>${paymentMeansXml}${taxXml}${periodXml}${dueDateXml}
+\t\t\t<ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+\t\t\t\t<ram:LineTotalAmount>${formatCentsAsAmount(data.totals.netCents)}</ram:LineTotalAmount>
+\t\t\t\t<ram:TaxBasisTotalAmount>${formatCentsAsAmount(data.totals.netCents)}</ram:TaxBasisTotalAmount>
+\t\t\t\t<ram:TaxTotalAmount currencyID="${currency}">${formatCentsAsAmount(data.totals.taxCents)}</ram:TaxTotalAmount>
+\t\t\t\t<ram:GrandTotalAmount>${formatCentsAsAmount(data.totals.grossCents)}</ram:GrandTotalAmount>
+\t\t\t\t<ram:DuePayableAmount>${formatCentsAsAmount(data.totals.grossCents)}</ram:DuePayableAmount>
+\t\t\t</ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+\t\t</ram:ApplicableHeaderTradeSettlement>
+\t</rsm:SupplyChainTradeTransaction>
 </rsm:CrossIndustryInvoice>
 `;
 }
 
 /**
- * Render one `IncludedSupplyChainTradeLineItem`. The line item carries its
- * own tax category (CategoryCode S = standard) so that BASIC validators can
- * reconcile each line against the document-level ApplicableTradeTax block.
+ * Render one `IncludedSupplyChainTradeLineItem`. The line carries its own tax
+ * category so validators can reconcile it against the document-level block.
  */
 function renderLineItem(item: InvoiceXmlData["items"][number]): string {
+  const cat = taxCategoryFor(item.taxRate);
   return `
-		<ram:IncludedSupplyChainTradeLineItem>
-			<ram:AssociatedDocumentLineDocument>
-				<ram:LineID>${escapeXml(String(item.position))}</ram:LineID>
-			</ram:AssociatedDocumentLineDocument>
-			<ram:SpecifiedTradeProduct>
-				<ram:Name>${escapeXml(item.description)}</ram:Name>
-			</ram:SpecifiedTradeProduct>
-			<ram:SpecifiedLineTradeAgreement>
-				<ram:NetPriceProductTradePrice>
-					<ram:ChargeAmount>${formatCentsAsAmount(item.unitPriceNetCents)}</ram:ChargeAmount>
-				</ram:NetPriceProductTradePrice>
-			</ram:SpecifiedLineTradeAgreement>
-			<ram:SpecifiedLineTradeDelivery>
-				<ram:BilledQuantity unitCode="${escapeXml(item.unit || "C62")}">${item.quantity}</ram:BilledQuantity>
-			</ram:SpecifiedLineTradeDelivery>
-			<ram:SpecifiedLineTradeSettlement>
-				<ram:ApplicableTradeTax>
-					<ram:TypeCode>VAT</ram:TypeCode>
-					<ram:CategoryCode>S</ram:CategoryCode>
-					<ram:RateApplicablePercent>${item.taxRate.toFixed(2)}</ram:RateApplicablePercent>
-				</ram:ApplicableTradeTax>
-				<ram:SpecifiedTradeSettlementLineMonetarySummation>
-					<ram:LineTotalAmount>${formatCentsAsAmount(item.lineTotalNetCents)}</ram:LineTotalAmount>
-				</ram:SpecifiedTradeSettlementLineMonetarySummation>
-			</ram:SpecifiedLineTradeSettlement>
-		</ram:IncludedSupplyChainTradeLineItem>`;
+\t\t<ram:IncludedSupplyChainTradeLineItem>
+\t\t\t<ram:AssociatedDocumentLineDocument>
+\t\t\t\t<ram:LineID>${escapeXml(String(item.position))}</ram:LineID>
+\t\t\t</ram:AssociatedDocumentLineDocument>
+\t\t\t<ram:SpecifiedTradeProduct>
+\t\t\t\t<ram:Name>${escapeXml(item.description)}</ram:Name>
+\t\t\t</ram:SpecifiedTradeProduct>
+\t\t\t<ram:SpecifiedLineTradeAgreement>
+\t\t\t\t<ram:NetPriceProductTradePrice>
+\t\t\t\t\t<ram:ChargeAmount>${formatCentsAsAmount(item.unitPriceNetCents)}</ram:ChargeAmount>
+\t\t\t\t</ram:NetPriceProductTradePrice>
+\t\t\t</ram:SpecifiedLineTradeAgreement>
+\t\t\t<ram:SpecifiedLineTradeDelivery>
+\t\t\t\t<ram:BilledQuantity unitCode="${escapeXml(toUnitCode(item.unit))}">${item.quantity}</ram:BilledQuantity>
+\t\t\t</ram:SpecifiedLineTradeDelivery>
+\t\t\t<ram:SpecifiedLineTradeSettlement>
+\t\t\t\t<ram:ApplicableTradeTax>
+\t\t\t\t\t<ram:TypeCode>VAT</ram:TypeCode>
+\t\t\t\t\t<ram:CategoryCode>${cat}</ram:CategoryCode>
+\t\t\t\t\t<ram:RateApplicablePercent>${item.taxRate.toFixed(2)}</ram:RateApplicablePercent>
+\t\t\t\t</ram:ApplicableTradeTax>
+\t\t\t\t<ram:SpecifiedTradeSettlementLineMonetarySummation>
+\t\t\t\t\t<ram:LineTotalAmount>${formatCentsAsAmount(item.lineTotalNetCents)}</ram:LineTotalAmount>
+\t\t\t\t</ram:SpecifiedTradeSettlementLineMonetarySummation>
+\t\t\t</ram:SpecifiedLineTradeSettlement>
+\t\t</ram:IncludedSupplyChainTradeLineItem>`;
 }
 
 /**
- * Render one document-level `ApplicableTradeTax` block (one per VAT rate).
+ * Render one document-level `ApplicableTradeTax` block (one per VAT group).
  */
 function renderTradeTax(group: InvoiceXmlData["taxGroups"][number]): string {
+  const cat = group.category ?? taxCategoryFor(group.rate);
+  const reason =
+    cat === "S"
+      ? ""
+      : `${NL}\t\t\t\t<ram:ExemptionReason>${escapeXml(group.exemptionReason || DEFAULT_EXEMPTION_REASON)}</ram:ExemptionReason>`;
   return `
-			<ram:ApplicableTradeTax>
-				<ram:CalculatedAmount>${formatCentsAsAmount(group.amountCents)}</ram:CalculatedAmount>
-				<ram:TypeCode>VAT</ram:TypeCode>
-				<ram:BasisAmount>${formatCentsAsAmount(group.netAmountCents)}</ram:BasisAmount>
-				<ram:CategoryCode>S</ram:CategoryCode>
-				<ram:RateApplicablePercent>${group.rate.toFixed(2)}</ram:RateApplicablePercent>
-			</ram:ApplicableTradeTax>`;
+\t\t\t<ram:ApplicableTradeTax>
+\t\t\t\t<ram:CalculatedAmount>${formatCentsAsAmount(group.amountCents)}</ram:CalculatedAmount>
+\t\t\t\t<ram:TypeCode>VAT</ram:TypeCode>${reason}
+\t\t\t\t<ram:BasisAmount>${formatCentsAsAmount(group.netAmountCents)}</ram:BasisAmount>
+\t\t\t\t<ram:CategoryCode>${cat}</ram:CategoryCode>
+\t\t\t\t<ram:RateApplicablePercent>${group.rate.toFixed(2)}</ram:RateApplicablePercent>
+\t\t\t</ram:ApplicableTradeTax>`;
 }
 
 /**
@@ -349,16 +445,16 @@ function renderPaymentMeans(
   holder: string | undefined,
 ): string {
   const holderName = holder
-    ? `\n\t\t\t\t\t<ram:AccountName>${escapeXml(holder)}</ram:AccountName>`
+    ? `${NL}\t\t\t\t\t<ram:AccountName>${escapeXml(holder)}</ram:AccountName>`
     : "";
   const bicXml = bic
-    ? `\n\t\t\t\t<ram:PayeeSpecifiedCreditorFinancialInstitution><ram:BICID>${escapeXml(bic)}</ram:BICID></ram:PayeeSpecifiedCreditorFinancialInstitution>`
+    ? `${NL}\t\t\t\t<ram:PayeeSpecifiedCreditorFinancialInstitution><ram:BICID>${escapeXml(bic)}</ram:BICID></ram:PayeeSpecifiedCreditorFinancialInstitution>`
     : "";
   return `
-			<ram:SpecifiedTradeSettlementPaymentMeans>
-				<ram:TypeCode>58</ram:TypeCode>
-				<ram:PayeePartyCreditorFinancialAccount>
-					<ram:IBANID>${escapeXml(iban)}</ram:IBANID>${holderName}
-				</ram:PayeePartyCreditorFinancialAccount>${bicXml}
-			</ram:SpecifiedTradeSettlementPaymentMeans>`;
+\t\t\t<ram:SpecifiedTradeSettlementPaymentMeans>
+\t\t\t\t<ram:TypeCode>58</ram:TypeCode>
+\t\t\t\t<ram:PayeePartyCreditorFinancialAccount>
+\t\t\t\t\t<ram:IBANID>${escapeXml(iban)}</ram:IBANID>${holderName}
+\t\t\t\t</ram:PayeePartyCreditorFinancialAccount>${bicXml}
+\t\t\t</ram:SpecifiedTradeSettlementPaymentMeans>`;
 }

@@ -1,9 +1,7 @@
 # E-Rechnung: Ist-Stand (Audit)
 
-Stand: Branch `docs/promotion-01-05`. Ehrliche Bestandsaufnahme, keine Werbeaussage.
-Der offizielle KoSIT-Validator (und Mustangproject/veraPDF) konnte in dieser Umgebung
-**nicht** ausgeführt werden (kein Java). Nichts hier ist gegen den KoSIT-Validator geprüft.
-Formal korrekt heißt hier nur: manuell gegen die CII-Schema-Reihenfolge gelesen.
+Stand: 2026-10-14. Ehrliche Bestandsaufnahme, keine Werbeaussage. Die Abschnitte 1 und 3 stammen aus dem ersten
+Audit (ohne Java); Abschnitt 2 und 4 sind aktualisiert und mit Mustangproject/veraPDF geprüft.
 
 ## 1. Was existiert
 
@@ -17,14 +15,17 @@ Formal korrekt heißt hier nur: manuell gegen die CII-Schema-Reihenfolge gelesen
 | GoBD | `src-tauri/src/gobd.rs` | GoBD-Export (ZIP/CSV, Audit-Log). Enthält **keine** E-Rechnungs-Logik (kein Treffer für XRechnung/ZUGFeRD/CII/UBL). |
 | Eingehende Rechnungen | `src/routes/eingehende-rechnungen/+page.svelte` | Vorher: nur manuelle Erfassung + Dateianhang (PDF/Bild), kein XML-Import. Jetzt: Erkennung und Vorschau (Z. ~33-34, 430-437), Original wird unverändert gespeichert (`writeLocalAttachment` / `uploadFile` nutzen `file.arrayBuffer()`). |
 
-## 2. Wichtigster Befund: Export ist nicht angebunden
+## 2. Ausgang ist angebunden
 
-`renderInvoiceXml` und `createInvoicePdfA3` werden **nirgends** außerhalb von `src/lib/pdf/` und der Tests
-aufgerufen (`grep` über `src/`). Die Einstellung `einvoice_format` wird gespeichert, aber der Rechnungs-
-Export (`InvoiceForm.svelte` / `invoice-pdf-writer`) erzeugt weiterhin klassische PDFs. Nutzer können
-also heute **keine** E-Rechnung aus der App exportieren. Der Hinweistext in `src/lib/i18n/de.ts:~400`
-("noch nicht implementiert (COMP-3.b)") ist dazu konsistent, nennt aber ein Datum ("seit 01.01.2025"),
-das **von Mensch gegen BMF/KoSIT zu prüfen** ist.
+Stand 2026-10-14: `InvoiceForm.svelte` ruft bei `einvoice_format = zugferd | xrechnung` `createEInvoice`
+(`src/lib/einvoice/export.ts`) statt `createInvoicePdf`. Ablauf: Daten aufbauen (`build.ts`) → Vorprüfung
+(`validate.ts`, blockiert bei Fehlern) → XML (`invoice-xml.ts`) → bei ZUGFeRD PDF/A-3-Hülle (`invoice-pdf-a3.ts`,
+eingebettete Liberation Sans, sRGB-ICC, XMP-Erweiterungsschema, Trailer-ID) → Rückleseprobe mit dem Empfangscode.
+Die S3-Ablage nutzt bei ZUGFeRD das Hybrid-PDF, bei XRechnung weiterhin das optische PDF.
+
+**Geprüft mit Mustangproject 2.16.3** (XSD, EN-16931- und XRechnung-Schematron, veraPDF PDF/A-3B): ZUGFeRD
+(Standardfall, Mischfall 19 %/0 % mit Steuernummer statt USt-IdNr.) und XRechnung ohne Befund
+(`BOOKIE_TEST_MUSTANG=1`, siehe `scripts/fetch-mustang.sh`). Der KoSIT-Validator selbst wurde nicht separat ausgeführt.
 
 ## 3. Empfang (5.2) - Entscheidung
 
@@ -39,27 +40,21 @@ das **von Mensch gegen BMF/KoSIT zu prüfen** ist.
   Nicht gelesen: Zahlungsangaben (IBAN), Zu-/Abschläge auf Dokumentebene, Anhänge (BG-24), Skonto.
 - Die Anzeige ist eine Lesehilfe, keine Prüfung der Rechnung. Prüfung gegen EN 16931/XRechnung findet nicht statt.
 
-## 4. Ausgang (5.3) - Abgleich gegen EN 16931 / XRechnung
+## 4. Ausgang: bekannte Lücken
 
-Geprüft per Lesen von `invoice-xml.ts`; Elementreihenfolge entspricht der CII-Sequenz (Header-Agreement,
-Delivery, Settlement; Party: Name, Adresse, Steuerregistrierung). Behoben: optionale Käuferreferenz
-(BT-10) wird jetzt als `ram:BuyerReference` ausgegeben (`invoice-xml.ts` Feld `buyerReference`).
+Behoben seit dem ersten Audit: ZUGFeRD jetzt im Profil EN 16931 (statt BASIC), Steuerkategorie (S/E) mit
+Befreiungsgrund, UN/ECE-Einheiten, Verkäuferkontakt (BG-6), elektronische Adressen (BT-34/BT-49), Zahlungsreferenz
+(BT-83), Leistungszeitraum (BG-14), Käuferreferenz (BT-10, Formularfeld und Spalte `invoices.buyer_reference`, Migration 0032), Verkäufer-ID bei
+reiner Steuernummer (BR-CO-26), PDF/A-3 (Schriften, ICC, XMP, Trailer-ID), Business Process für XRechnung (BT-23).
 
-Offene Lücken (nicht behoben, nicht validiert):
+Offen:
 
-1. XRechnung verlangt BT-10 (BR-DE-15): Feld existiert nun, wird aber nirgends befüllt (kein UI, keine DB-Spalte).
-2. Verkäuferkontakt (BG-6: Name, Telefon, E-Mail; BR-DE-2/5/6/7) fehlt.
-3. Elektronische Adressen BT-34/BT-49 (`URIUniversalCommunication`) fehlen (in XRechnung 3.0 verpflichtend; Details im Regelwerk prüfen).
-4. Steuerkategorie ist hart `S`. Steuerfrei, Kleinunternehmer (§19 UStG), Reverse Charge, innergemeinschaftliche
-   Lieferung brauchen Kategorien E/Z/AE/K/G und Befreiungsgrund (BR-E-*, BR-AE-*); ein 0-%-Satz mit `S` ist ungültig.
-5. Einheit: `item.unit` ist Freitext (z. B. "h"); EN 16931 verlangt UN/ECE Rec. 20 Codes (`HUR`, `C62`). Fallback `C62` nur bei leerem Wert.
-6. Nur BASIC-Profil für ZUGFeRD; EN16931-Profil ("COMFORT") wäre das in der Spec genannte Ziel. Das Guideline-URN dafür ist `urn:cen.eu:en16931:2017` - nicht umgesetzt.
-7. Keine Zahlungsreferenz (BT-83), keine Dokumentebenen-Rabatte, keine Anzahlungen, keine Gutschrift (nur Typ 380).
-8. Rundung/Summenkonsistenz (BR-CO-*) wird nicht programmatisch geprüft.
-9. PDF/A-3: keine eingebetteten Schriften (Standard-14), kein ICC-Profil, kein XMP-Extension-Schema für den `fx:`-Namespace. veraPDF würde das voraussichtlich beanstanden. `XRECHNUNG` als Factur-X-Konformitätsstufe im XMP ist **zu prüfen**.
-10. Kein UBL-Export (nur CII).
-11. Keine automatische Validierung gegen KoSIT in Tests (kein Java); die Spec fordert dies für CI. Weiterhin offen.
-12. Bibliothekswahl (Spec: "bevorzugt Rust/JS-Bibliothek, dokumentieren"): bislang handgeschrieben, keine Bibliothek bewertet.
+1. Steuerkategorien AE (Reverse Charge), K (innergemeinschaftlich), G (Ausfuhr), O: der Emitter kennt sie
+   (`category`, `exemptionReason`), das Formular liefert sie nicht; 0 % wird immer als E gesendet (Warnung).
+2. Keine Anzahlungen, keine Dokumentebenen-Rabatte, keine Gutschrift (nur Typ 380).
+3. Kein UBL-Export (nur CII).
+4. Vorprüfung ist eine Teilmenge der EN-16931-Regeln; verbindlich sind KoSIT bzw. Mustangproject (nur manuell/gated).
+5. XRechnung als reine XML-Datei: kein PDF-Begleitdokument, S3 hält das optische PDF.
 
 ## 5. Quellen
 

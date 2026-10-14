@@ -20,6 +20,9 @@
 	import { t, LOCALE_LABELS, type Locale } from '$lib/i18n';
 	import { LEGAL_COUNTRIES, type LegalCountry } from '$lib/legal';
 	import { computeInvoiceTotals, lineTotal, toCents } from '$lib/shared/invoice-totals';
+	import { buildInvoiceXmlData } from '$lib/einvoice/build';
+	import { describeIssue } from '$lib/einvoice/format';
+	import { hasErrors, validateInvoiceXmlData, type EInvoiceIssue } from '$lib/einvoice/validate';
 
 	type LineItem = {
 		id?: number;
@@ -39,6 +42,7 @@
 		initialDueSurcharge?: string;
 		initialServicePeriodStart?: string;
 		initialServicePeriodEnd?: string;
+		initialBuyerReference?: string;
 		initialDeliveryDate?: string;
 		initialNotes?: string;
 		initialItems?: LineItem[];
@@ -61,6 +65,7 @@
 		dueSurcharge: number;
 		servicePeriodStart: string;
 		servicePeriodEnd: string;
+		buyerReference: string;
 		deliveryDate: string;
 		notes: string;
 		language: string;
@@ -82,6 +87,7 @@
 		initialDueSurcharge = '0',
 		initialServicePeriodStart = '',
 		initialServicePeriodEnd = '',
+		initialBuyerReference = '',
 		initialDeliveryDate = '',
 		initialNotes = '',
 		initialItems = [],
@@ -121,6 +127,7 @@
 	let dueSurcharge = $state('0');
 	let servicePeriodStart = $state('');
 	let servicePeriodEnd = $state('');
+	let buyerReference = $state('');
 	let deliveryDate = $state('');
 	let notes = $state('');
 	let language = $state('de');
@@ -215,6 +222,7 @@
 			dueSurcharge = initialDueSurcharge;
 			servicePeriodStart = initialServicePeriodStart;
 			servicePeriodEnd = initialServicePeriodEnd;
+			buyerReference = initialBuyerReference;
 			deliveryDate = initialDeliveryDate || initialIssueDate;
 			notes = initialNotes;
 			language = initialLanguage || 'de';
@@ -323,6 +331,18 @@
 		return missing;
 	}
 
+	/** Structured data + pre-flight issues for the configured e-invoice format. */
+	function prepareEInvoice(data: InvoicePdfData) {
+		const format = orgSettings.einvoice_format;
+		if (format === 'plain') return null;
+		const xml = buildInvoiceXmlData(data, { org: orgSettings, company, customer: getSelectedCustomer(), buyerReference });
+		return { format, xml, issues: validateInvoiceXmlData(xml, format) };
+	}
+
+	function issueText(title: string, issues: EInvoiceIssue[]): string {
+		return `${title}:\n• ${issues.map(describeIssue).join('\n• ')}`;
+	}
+
 	async function downloadPdf() {
 		const data = buildPdfData();
 		const missing = validatePdfData(data);
@@ -333,18 +353,32 @@
 		pdfError = '';
 		pdfSuccess = '';
 
+		const eInvoice = prepareEInvoice(data);
+		if (eInvoice && hasErrors(eInvoice.issues)) {
+			pdfError = issueText(t('einvoice.errorsTitle'), eInvoice.issues.filter((i) => i.severity === 'error'));
+			return;
+		}
+
 		const safeNumber = invoiceNumber.replace(/[^a-zA-Z0-9\-_]/g, '-');
+		const isXml = eInvoice?.format === 'xrechnung';
 		const filePath = await save({
 			title: t('invoiceForm.savePdf'),
-			defaultPath: `Rechnung-${safeNumber}.pdf`,
-			filters: [{ name: 'PDF', extensions: ['pdf'] }]
+			defaultPath: `Rechnung-${safeNumber}.${isXml ? 'xml' : 'pdf'}`,
+			filters: isXml ? [{ name: 'XML', extensions: ['xml'] }] : [{ name: 'PDF', extensions: ['pdf'] }]
 		});
 		if (!filePath) return;
 
 		pdfLoading = true;
 		try {
-			const pdfBytes = await (await import('$lib/pdf/invoice-pdf-writer')).createInvoicePdf(data);
-			await writeBinaryFile(filePath, pdfBytes);
+			if (eInvoice) {
+				const { createEInvoice } = await import('$lib/einvoice/export');
+				const file = await createEInvoice(data, eInvoice.xml, eInvoice.format);
+				await writeBinaryFile(filePath, file.bytes);
+				if (file.warnings.length > 0) pdfSuccess = issueText(t('einvoice.warningsTitle'), file.warnings);
+			} else {
+				const pdfBytes = await (await import('$lib/pdf/invoice-pdf-writer')).createInvoicePdf(data);
+				await writeBinaryFile(filePath, pdfBytes);
+			}
 		} catch (err) {
 			pdfError = `${t('invoiceForm.pdfError')}: ${messageForUnknown(err)}`;
 		} finally {
@@ -369,6 +403,7 @@
 			dueSurcharge: parseFloat(dueSurcharge) || 0,
 			servicePeriodStart,
 			servicePeriodEnd,
+			buyerReference: buyerReference.trim(),
 			deliveryDate: deliveryDate || issueDate,
 			notes,
 			language,
@@ -384,7 +419,12 @@
 			const s3Config = await getS3Settings();
 			if (s3Config.enabled) {
 				const data = buildPdfData();
-				const pdfBytes = await (await import('$lib/pdf/invoice-pdf-writer')).createInvoicePdf(data);
+				const eInvoice = prepareEInvoice(data);
+				// ponytail: XRechnung is XML-only, so S3 keeps the visual PDF for it.
+				const pdfBytes =
+					eInvoice?.format === 'zugferd'
+						? (await (await import('$lib/einvoice/export')).createEInvoice(data, eInvoice.xml, 'zugferd')).bytes
+						: await (await import('$lib/pdf/invoice-pdf-writer')).createInvoicePdf(data);
 				const safeNumber = invoiceNumber.replace(/[^a-zA-Z0-9\-_]/g, '-');
 				const key = await uploadInvoicePdf(s3Config, safeNumber, pdfBytes);
 				s3Key = key;
@@ -462,6 +502,11 @@
 					<DateInput bind:value={servicePeriodEnd} label={t('invoiceForm.servicePeriodTo')} disabled={!isEditable} />
 					<Select bind:value={language} label={t('invoiceForm.language')} options={localeOptions} disabled={!isEditable} />
 					<Select bind:value={legalCountry} label={t('invoiceForm.legalCountry')} options={legalCountryOptions} disabled={!isEditable} />
+				</div>
+
+				<!-- Row 4: E-invoice buyer reference (BT-10) -->
+				<div class="mt-3 grid gap-3 md:grid-cols-4">
+					<TextInput bind:value={buyerReference} label={t('invoiceForm.buyerReference')} placeholder="04011000-12345-34" disabled={!isEditable} />
 				</div>
 			</div>
 

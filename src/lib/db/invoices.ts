@@ -45,7 +45,8 @@ type CreateInvoice = Omit<
   | "references_invoice_id"
   | "cancellation_reason"
   | "paid_date"
->;
+  | "buyer_reference"
+> & { buyer_reference?: string | null }; // optional: recurring/legacy callers omit it
 type UpdateInvoice = Partial<CreateInvoice>;
 
 const ALLOWED_COLUMNS = [
@@ -59,6 +60,7 @@ const ALLOWED_COLUMNS = [
   "delivery_date",
   "service_period_start",
   "service_period_end",
+  "buyer_reference",
   "currency",
   "net_cents",
   "tax_cents",
@@ -118,8 +120,8 @@ export async function getInvoiceById(id: number): Promise<Invoice | undefined> {
 export async function createInvoice(data: CreateInvoice): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
-    `INSERT INTO invoices (company_id, customer_id, project_id, invoice_number, status, issue_date, due_date, service_period_start, service_period_end, currency, net_cents, tax_cents, gross_cents, issuer_name, issuer_tax_number, issuer_vat_id, issuer_bank_account_holder, issuer_bank_iban, issuer_bank_bic, issuer_bank_name, recipient_name, recipient_street, recipient_postal_code, recipient_city, recipient_country_code, notes)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
+    `INSERT INTO invoices (company_id, customer_id, project_id, invoice_number, status, issue_date, due_date, service_period_start, service_period_end, currency, net_cents, tax_cents, gross_cents, issuer_name, issuer_tax_number, issuer_vat_id, issuer_bank_account_holder, issuer_bank_iban, issuer_bank_bic, issuer_bank_name, recipient_name, recipient_street, recipient_postal_code, recipient_city, recipient_country_code, notes, buyer_reference)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)`,
     [
       data.company_id,
       data.customer_id,
@@ -147,6 +149,7 @@ export async function createInvoice(data: CreateInvoice): Promise<number> {
       data.recipient_city,
       data.recipient_country_code,
       data.notes,
+      data.buyer_reference ?? null,
     ],
   );
   return result.lastInsertId!;
@@ -267,7 +270,8 @@ export async function listAllInvoices(opts?: {
   const db = await getDb();
   const raw = await db.select<
     (InvoiceWithCustomer & { _total_count: number })[]
-  >(`
+  >(
+    `
 		SELECT i.*, c.name AS customer_name, COUNT(*) OVER() AS _total_count
 		FROM invoices i
 		LEFT JOIN customers c ON i.customer_id = c.id

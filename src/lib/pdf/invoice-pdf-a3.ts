@@ -25,20 +25,17 @@
  * The visual rendering is byte-for-byte the existing pdf-lib output —
  * this module never re-lays-out or re-flows content.
  *
- * ## What this module does NOT do
+ * ## PDF/A-3 conformance
  *
- * Full PDF/A-3 conformance (font subset embedding, no transparency, no
- * encryption, ICC profile bytes for the OutputIntent, structure-tree
- * tagging) cannot be guaranteed from pdf-lib + the standard 14 fonts
- * alone. The output here is best-effort: it carries the structural
- * markers a Factur-X / ZUGFeRD consumer (Mustangproject, X-Rechnung
- * validators) needs to find and parse the embedded XML, and declares
- * PDF/A-3 conformance in XMP — but a strict veraPDF run will still flag
- * font and colour-management gaps that need further work in COMP-3.d /
- * follow-ups. See COMP-3.c PR description for the documented gap list.
+ * The output is validated against veraPDF (via Mustangproject) in
+ * `tests/lib/pdf/einvoice-validator.test.ts` when `BOOKIE_TEST_MUSTANG=1`:
+ * fonts are embedded (Liberation Sans, subset), the OutputIntent carries a real
+ * sRGB ICC profile, the XMP packet declares the `fx:` extension schema, and the
+ * trailer has a file ID. No structure tagging (PDF/A-3**B**, not **A**).
  */
 
 import { AFRelationship, PDFDocument, PDFName, PDFHexString } from "pdf-lib";
+import { loadSrgbIcc } from "./assets";
 import type { InvoicePdfData } from "./invoice-pdf";
 import { createInvoicePdf } from "./invoice-pdf-writer";
 import type { InvoiceXmlData, XmlInvoiceFormat } from "./invoice-xml";
@@ -72,17 +69,17 @@ export const XML_FILENAMES: Record<XmlInvoiceFormat, string> = {
 const FX_DOCUMENT_TYPE = "INVOICE";
 
 /**
- * The `<fx:Version>` value — Factur-X spec version. We emit the BASIC
- * profile of Factur-X 1.0 (matching `renderInvoiceXml`'s ZUGFeRD
+ * The `<fx:Version>` value — Factur-X spec version. We emit the EN 16931
+ * profile ("COMFORT") of Factur-X 1.0 (matching `renderInvoiceXml`'s ZUGFeRD
  * branch).
  */
 const FX_VERSION = "1.0";
 
 /**
- * The `<fx:ConformanceLevel>` value. `BASIC` matches the CII XML
+ * The `<fx:ConformanceLevel>` value. `EN 16931` matches the CII XML
  * actually produced by `renderInvoiceXml` for `format='zugferd'`.
  */
-const FX_CONFORMANCE = "BASIC";
+const FX_CONFORMANCE = "EN 16931";
 
 export interface CreateInvoicePdfA3Args {
   /** Visual invoice data — same shape `createInvoicePdf` already accepts. */
@@ -105,7 +102,7 @@ export async function createInvoicePdfA3(
 ): Promise<Uint8Array> {
   const { pdfData, xmlData, format } = args;
 
-  const visualBytes = await createInvoicePdf(pdfData);
+  const visualBytes = await createInvoicePdf(pdfData, { embedFonts: true });
   const xmlString = renderInvoiceXml(xmlData, format);
   const xmlBytes = new TextEncoder().encode(xmlString);
 
@@ -161,10 +158,20 @@ export async function createInvoicePdfA3(
 
   // --- sRGB OutputIntent ---------------------------------------------------
   // PDF/A bans uncoloured device-dependent rendering, so we declare an sRGB
-  // output intent. We do NOT embed the ICC profile bytes (that would
-  // require shipping ~3kB of binary ICC data); a strict PDF/A validator
-  // will flag this — see the documented gap list in the PR.
-  addSrgbOutputIntent(pdfDoc);
+  // output intent with the ICC profile embedded.
+  await addSrgbOutputIntent(pdfDoc);
+
+  // --- Trailer file ID (ISO 19005-3 6.1.3) ---------------------------------
+  // Derived from the XML so identical input still yields identical bytes.
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", xmlBytes),
+  );
+  const id = PDFHexString.of(
+    Array.from(digest.subarray(0, 16), (b) =>
+      b.toString(16).padStart(2, "0"),
+    ).join(""),
+  );
+  pdfDoc.context.trailerInfo.ID = pdfDoc.context.obj([id, id]);
 
   // --- MarkInfo: declare the doc as untagged but well-marked --------------
   pdfDoc.catalog.set(
@@ -205,6 +212,44 @@ export function buildXmpMetadata(params: {
   // most validators follow), with `BASIC` swapped for the XRechnung
   // conformance tag.
   const fxNamespace = "urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#";
+  const fxProps: Array<[string, string]> = [
+    ["DocumentFileName", "name of the embedded XML invoice file"],
+    ["DocumentType", "The type of the hybrid document"],
+    [
+      "Version",
+      "The actual version of the standard applying to the embedded XML document",
+    ],
+    ["ConformanceLevel", "The conformance level of the embedded XML document"],
+  ];
+  const fxExtension = `
+		<rdf:Description rdf:about=""
+				xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/"
+				xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#"
+				xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#">
+			<pdfaExtension:schemas>
+				<rdf:Bag>
+					<rdf:li rdf:parseType="Resource">
+						<pdfaSchema:schema>Factur-X PDFA Extension Schema</pdfaSchema:schema>
+						<pdfaSchema:namespaceURI>${fxNamespace}</pdfaSchema:namespaceURI>
+						<pdfaSchema:prefix>fx</pdfaSchema:prefix>
+						<pdfaSchema:property>
+							<rdf:Seq>${fxProps
+                .map(
+                  ([name, desc]) => `
+								<rdf:li rdf:parseType="Resource">
+									<pdfaProperty:name>${name}</pdfaProperty:name>
+									<pdfaProperty:valueType>Text</pdfaProperty:valueType>
+									<pdfaProperty:category>external</pdfaProperty:category>
+									<pdfaProperty:description>${desc}</pdfaProperty:description>
+								</rdf:li>`,
+                )
+                .join("")}
+							</rdf:Seq>
+						</pdfaSchema:property>
+					</rdf:li>
+				</rdf:Bag>
+			</pdfaExtension:schemas>
+		</rdf:Description>`;
   const fxBlock =
     format === "zugferd"
       ? `
@@ -254,32 +299,34 @@ export function buildXmpMetadata(params: {
 				xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
 			<pdfaid:part>3</pdfaid:part>
 			<pdfaid:conformance>B</pdfaid:conformance>
-		</rdf:Description>${fxBlock}
+		</rdf:Description>${fxExtension}${fxBlock}
 	</rdf:RDF>
 </x:xmpmeta>
 <?xpacket end="w"?>`;
 }
 
 /**
- * Add an sRGB OutputIntent dictionary to the catalog. Required for
- * PDF/A — this provides a colour-space anchor so device-dependent
- * rendering is well-defined.
- *
- * NB: We declare `OutputConditionIdentifier=sRGB` and the ISO standard
- * registry name, but do NOT embed the ICC profile bytes. veraPDF strict
- * mode will flag the missing `DestOutputProfile` — see the gap list.
+ * Add an sRGB OutputIntent dictionary (with embedded ICC profile) to the
+ * catalog. Required for PDF/A: the page content uses DeviceRGB.
  */
-function addSrgbOutputIntent(pdfDoc: PDFDocument): void {
+async function addSrgbOutputIntent(pdfDoc: PDFDocument): Promise<void> {
+  const icc = await loadSrgbIcc();
+  const profileRef = pdfDoc.context.register(
+    pdfDoc.context.stream(icc, { N: 3, Length: icc.length }),
+  );
   const intent = pdfDoc.context.obj({
     Type: "OutputIntent",
     S: "GTS_PDFA1",
     OutputConditionIdentifier: PDFHexString.fromText("sRGB"),
     RegistryName: PDFHexString.fromText("http://www.color.org"),
     Info: PDFHexString.fromText("sRGB IEC61966-2.1"),
+    DestOutputProfile: profileRef,
   });
   const intentRef = pdfDoc.context.register(intent);
-  const intentsArray = pdfDoc.context.obj([intentRef]);
-  pdfDoc.catalog.set(PDFName.of("OutputIntents"), intentsArray);
+  pdfDoc.catalog.set(
+    PDFName.of("OutputIntents"),
+    pdfDoc.context.obj([intentRef]),
+  );
 }
 
 /**
@@ -288,7 +335,7 @@ function addSrgbOutputIntent(pdfDoc: PDFDocument): void {
  */
 function factorXmlDescription(format: XmlInvoiceFormat): string {
   return format === "zugferd"
-    ? "ZUGFeRD/Factur-X invoice in CII XML, BASIC profile"
+    ? "ZUGFeRD/Factur-X invoice in CII XML, EN 16931 profile"
     : "XRechnung 3.0 invoice in CII XML";
 }
 

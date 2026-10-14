@@ -4,6 +4,8 @@
  */
 
 import { PDFDocument, StandardFonts, rgb, PDFPage, PDFFont } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
+import { loadFontBytes } from './assets';
 import { fmtDate, fmtNumber, type InvoicePdfData } from './invoice-pdf';
 import { translationsFor } from '$lib/i18n';
 import { getLegalProfile } from '$lib/legal';
@@ -81,7 +83,12 @@ function drawLine(page: PDFPage, x1Mm: number, yMm: number, x2Mm: number, color:
 	page.drawLine({ start: { x: mm2pt(x1Mm), y: yPt(yMm) }, end: { x: mm2pt(x2Mm), y: yPt(yMm) }, thickness: widthPt, color });
 }
 
-export async function createInvoicePdf(data: InvoicePdfData): Promise<Uint8Array> {
+export interface CreateInvoicePdfOptions {
+	/** Embed Liberation Sans instead of the standard-14 fonts (required for PDF/A). */
+	embedFonts?: boolean;
+}
+
+export async function createInvoicePdf(data: InvoicePdfData, opts: CreateInvoicePdfOptions = {}): Promise<Uint8Array> {
 	const locale = data.language || 'de';
 	const legalCountry = data.legalCountry || 'DE';
 	const profile = getLegalProfile(legalCountry);
@@ -91,8 +98,17 @@ export async function createInvoicePdf(data: InvoicePdfData): Promise<Uint8Array
 	const showDeliveryDate = profile.requiredPdfFields.includes('deliveryDate');
 
 	const pdfDoc = await PDFDocument.create();
-	const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-	const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+	let font: PDFFont;
+	let fontBold: PDFFont;
+	if (opts.embedFonts) {
+		pdfDoc.registerFontkit(fontkit);
+		const [regular, bold] = await loadFontBytes();
+		font = await pdfDoc.embedFont(regular, { subset: true });
+		fontBold = await pdfDoc.embedFont(bold, { subset: true });
+	} else {
+		font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+		fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+	}
 	const page = pdfDoc.addPage([mm2pt(PW), mm2pt(PH)]);
 
 	let y = MT;

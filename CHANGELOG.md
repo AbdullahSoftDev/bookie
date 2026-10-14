@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format is based on
 
 - Reworked `README.md`, added `README.de.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`.
 - E-Rechnung: incoming XRechnung and ZUGFeRD invoices can be read (see `docs/e-rechnung.md`).
+- E-Rechnung export: with `einvoice_format = zugferd`, "PDF speichern" now creates a ZUGFeRD / Factur-X
+  (EN 16931 profile) hybrid PDF/A-3 with embedded `factur-x.xml`; `xrechnung` saves an XRechnung 3.0 XML.
+  A pre-flight check (`src/lib/einvoice/validate.ts`) blocks export with a list of fixable problems, and the
+  generated file is read back before it is handed over. The ZUGFeRD PDF and both XML flavours pass the
+  Mustangproject validator (XSD, EN 16931 + XRechnung Schematron, veraPDF PDF/A-3B); run it with
+  `scripts/fetch-mustang.sh`. New dependency `@pdf-lib/fontkit`; Liberation Sans (OFL) and an sRGB ICC profile are bundled.
+- E-Rechnung: new per-invoice field "Leitweg-ID / Käuferreferenz" (BT-10, migration 0032, `invoices.buyer_reference`),
+  frozen once the invoice is issued. XRechnung export now works when it is filled in.
 - Removed `package-lock.json`; Bun (`bun.lock`) is the only package manager.
 
 ## 2026-05-17
