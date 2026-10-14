@@ -1,5 +1,19 @@
 name: Release
 
+# Releases are immutable once published: assets cannot be added and the tag name
+# can never be reused. So the pipeline is built to make a half-finished release
+# impossible to publish:
+#   1. create-release  one draft for the tag, created exactly once, id handed to all builds
+#   2. build           one platform at a time, all uploading into that single draft
+#   3. publish         only after scripts/release-check.sh proves every installer and a
+#                      complete latest.json are in the draft
+# Do not change the builds back to creating their own release (tagName/releaseDraft
+# without releaseId): parallel jobs then each create a release and publish picks one.
+#
+# If a run fails before publish, just re-run it: the existing draft is reused.
+# If it fails in publish, nothing is public; fix and re-run.
+# To release: bump versions (package.json, Cargo.toml, tauri.conf.json), merge, push tag vX.Y.Z.
+
 on:
   push:
     tags:
@@ -7,29 +21,73 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to publish
+        description: Release tag to publish (must already exist and match the app version)
         required: true
-        default: v0.1.6
 
 permissions:
   contents: write
 
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
+  create-release:
+    name: Create draft release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.draft.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ env.TAG }}
+
+      - name: Check tag matches app version
+        run: scripts/release-check.sh versions "$TAG"
+
+      - name: Create or reuse the draft
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          existing="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate \
+            --jq '.[] | select(.tag_name == env.TAG) | "\(.id) \(.draft)"')"
+          count="$(grep -c . <<<"$existing" || true)"
+          if [ "$count" -eq 0 ]; then
+            id="$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$TAG" -f name="Bookie $TAG" -F draft=true -F prerelease=false --jq .id)"
+          elif [ "$count" -eq 1 ] && [ "${existing#* }" = "true" ]; then
+            id="${existing% *}"
+            echo "Reusing existing draft $id"
+          else
+            echo "::error::A release for $TAG already exists and is not a single draft:"
+            echo "$existing"
+            echo "A published release is immutable and cannot be completed. Use a new version."
+            exit 1
+          fi
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build ${{ matrix.platform }}
+    needs: create-release
     runs-on: ${{ matrix.platform }}
     environment: release
     strategy:
-      fail-fast: false
+      fail-fast: true
+      # One at a time: every job rewrites the shared latest.json (updater manifest);
+      # parallel writers can drop each other's platform.
+      max-parallel: 1
       matrix:
         platform: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ env.TAG }}
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -51,26 +109,40 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build, sign and publish
+      - name: Build, sign and upload to the draft
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          releaseName: "Bookie ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          releaseDraft: true # immutable releases: assets only addable while draft; publish job below
-          prerelease: false
-          # ponytail: uploads latest.json (updater manifest) next to the bundles
-          uploadUpdaterJson: true
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          # Without tagName the updater URLs in latest.json point at releases/latest/download/.
+          tagName: ${{ env.TAG }}
+          includeUpdaterJson: true
 
   publish:
     name: Publish release
-    needs: build
+    needs: [create-release, build]
     runs-on: ubuntu-latest
     steps:
-      - name: Publish draft
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ env.TAG }}
+
+      - name: Verify the draft is complete
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}" --draft=false --repo "${{ github.repository }}"
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        run: scripts/release-check.sh assets "$TAG" "$RELEASE_ID"
+
+      - name: Publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false --silent
+          rows="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate \
+            --jq '.[] | select(.tag_name == env.TAG) | "\(.id) \(.draft)"')"
+          [ "$rows" = "$RELEASE_ID false" ] || { echo "::error::Expected exactly one published release ($RELEASE_ID) for $TAG, found:"; echo "$rows"; exit 1; }
