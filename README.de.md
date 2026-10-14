@@ -14,7 +14,7 @@
 **Kostenloses Rechnungsprogramm und Buchhaltung für Freiberufler, Kleinunternehmer und kleine Unternehmen.**
 Open Source, offline, ohne Abo, ohne Cloud-Zwang. ca. 6 MB.
 
-[⬇ Download für Windows / macOS / Linux](https://github.com/logscale-it/bookie/releases/latest) · [🇬🇧 English](README.md)
+[⬇ Download für Windows / macOS / Linux](https://github.com/logscale-it/bookie/releases/latest) · [🌐 Website](https://logscale-it.github.io/bookie/de/) · [🇬🇧 English](README.md)
 
 <p align="center"><img src="docs/screenshots/dashboard-profit-loss.jpg" alt="Bookie Übersicht mit Gewinn und Verlust" width="800"></p>
 
