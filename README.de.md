@@ -14,7 +14,7 @@
 **Kostenloses Rechnungsprogramm und Buchhaltung für Freiberufler, Kleinunternehmer und kleine Unternehmen.**
 Open Source, offline, ohne Abo, ohne Cloud-Zwang. ca. 6 MB.
 
-[⬇ Download für Windows / macOS / Linux](https://github.com/logscale-it/bookie/releases/latest) · [🇬🇧 English](README.md)
+[⬇ Download für Windows / macOS / Linux](https://github.com/logscale-it/bookie/releases/latest) · [🌐 Website](https://logscale-it.github.io/bookie/de/) · [🇬🇧 English](README.md)
 
 <p align="center"><img src="docs/screenshots/dashboard-profit-loss.jpg" alt="Bookie Übersicht mit Gewinn und Verlust" width="800"></p>
 
@@ -34,11 +34,11 @@ Eine kostenlose Offline-Alternative zu Abo-Rechnungsprogrammen wie lexoffice ode
 
 ## Download & Installation
 
-Installer für Ihr System finden Sie unter [Releases](https://github.com/logscale-it/bookie/releases/latest):
+Installer gibt es auf der [Website](https://logscale-it.github.io/bookie/de/) (erkennt Ihr System automatisch) oder direkt unter [Releases](https://github.com/logscale-it/bookie/releases/latest):
 
 - **Windows:** `.msi` oder `.exe`
-- **macOS:** `.dmg` (Apple Silicon und Intel)
-- **Linux:** `.AppImage` oder `.deb`
+- **macOS:** `.dmg` (nur Apple Silicon)
+- **Linux:** `.AppImage`, `.deb` oder `.rpm`
 
 Bookie aktualisiert sich selbst über GitHub Releases.
 

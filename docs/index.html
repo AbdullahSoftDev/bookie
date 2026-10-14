@@ -7,6 +7,9 @@
   <meta name="description" content="Free, open-source desktop accounting app for small businesses. German law compliant invoicing, dashboards, time tracking. Runs on macOS, Windows, and Linux.">
   <meta name="keywords" content="accounting, invoicing, small business, German law, Rechnungen, Buchhaltung, desktop app, local-first, open source, Tauri">
   <link rel="canonical" href="https://logscale-it.github.io/bookie/">
+  <link rel="alternate" hreflang="en" href="https://logscale-it.github.io/bookie/">
+  <link rel="alternate" hreflang="de" href="https://logscale-it.github.io/bookie/de/">
+  <link rel="alternate" hreflang="x-default" href="https://logscale-it.github.io/bookie/">
 
   <!-- Open Graph -->
   <meta property="og:type" content="website">
@@ -14,8 +17,10 @@
   <meta property="og:title" content="Bookie — Local-First Accounting for Small Businesses">
   <meta property="og:description" content="Free, open-source desktop app. German law compliant invoicing, dashboards, and time tracking. Your data stays on your device.">
 
+  <meta property="og:image" content="https://logscale-it.github.io/bookie/social-preview.png">
+  <meta name="twitter:image" content="https://logscale-it.github.io/bookie/social-preview.png">
   <!-- Twitter -->
-  <meta name="twitter:card" content="summary">
+  <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Bookie — Local-First Accounting">
   <meta name="twitter:description" content="Free, open-source desktop accounting app. German law compliant. macOS, Windows, Linux.">
 
@@ -33,7 +38,6 @@
     "description": "Local-first desktop accounting app for small businesses, compliant with German law.",
     "url": "https://logscale-it.github.io/bookie/",
     "downloadUrl": "https://github.com/logscale-it/bookie/releases/latest",
-    "softwareVersion": "0.1.0",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
     "author": { "@type": "Organization", "name": "logscale-it" }
   }
@@ -130,6 +134,32 @@
       transition: color 0.15s;
     }
     .header-nav a:hover { color: var(--text); }
+    .header-nav a.lang-switch {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      width: 4.5rem;
+      padding: 2px;
+      border: 1px solid var(--border);
+      border-radius: 9999px;
+      background: var(--bg-card);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-align: center;
+      line-height: 1.5rem;
+    }
+    .lang-switch span { position: relative; z-index: 1; }
+    .lang-switch::before {
+      content: "";
+      position: absolute;
+      top: 2px; bottom: 2px; left: 2px;
+      width: calc(50% - 2px);
+      border-radius: 9999px;
+      background: var(--accent);
+      transition: transform 0.2s;
+    }
+    .lang-switch[data-lang="de"]::before { transform: translateX(100%); }
+    .lang-switch .on { color: #fff; }
     .github-link svg { display: block; }
 
     /* --- Hero --- */
@@ -372,6 +402,9 @@
       .features-grid { grid-template-columns: repeat(2, 1fr); }
       .download-grid { grid-template-columns: repeat(3, 1fr); }
     }
+    .hero-shot { display: block; max-width: 880px; width: 100%; height: auto; margin: 3rem auto 0; border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 20px 50px rgba(0,0,0,.12); }
+    .dl-note { max-width: 640px; margin: 2rem auto 0; font-size: .875rem; color: var(--text-muted); text-align: center; }
+    .dl-note a { color: var(--accent); }
   </style>
 </head>
 <body>
@@ -390,6 +423,7 @@
       <nav class="header-nav">
         <a href="#features" class="nav-text">Features</a>
         <a href="#download" class="nav-text">Download</a>
+        <a href="de/" class="lang-switch" data-lang="en" hreflang="de" aria-label="Switch to German"><span class="on">EN</span><span>DE</span></a>
         <a href="https://github.com/logscale-it/bookie" class="github-link" aria-label="View on GitHub" target="_blank" rel="noopener">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
         </a>
@@ -415,6 +449,7 @@
           </a>
           <a href="#download" class="other-platforms">All platforms &rarr;</a>
         </div>
+        <img class="hero-shot" src="screenshots/dashboard-profit-loss.jpg" alt="Bookie dashboard with profit and loss" width="1600" height="1000">
       </div>
     </section>
 
@@ -504,13 +539,14 @@
           </div>
 
         </div>
+        <p class="dl-note">macOS build is Apple Silicon only. Bookie is not yet code-signed, so your OS may warn you on first start. <a href="https://github.com/logscale-it/bookie#unknown-publisher--cant-be-opened-warnings" target="_blank" rel="noopener">How to open it</a>.</p>
       </div>
     </section>
   </main>
 
   <!-- Footer -->
   <footer class="footer">
-    <p>a <strong>logscale-it</strong> product</p>
+    <p>a <strong>logscale-it</strong> product &middot; <a href="https://github.com/logscale-it" target="_blank" rel="noopener">custom software development</a> &middot; <a href="de/">Deutsch</a></p>
     <div class="footer-links">
       <a href="https://github.com/logscale-it/bookie" target="_blank" rel="noopener">GitHub</a>
       <a href="https://github.com/logscale-it/bookie/releases/latest" target="_blank" rel="noopener">Releases</a>
