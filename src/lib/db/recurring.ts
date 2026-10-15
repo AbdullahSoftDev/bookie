@@ -32,17 +32,6 @@ export type NewRecurring = {
   payload: InvoicePayload | IncomingPayload;
 };
 
-export async function listRecurring(
-  companyId: number,
-): Promise<RecurringEntry[]> {
-  const db = await getDb();
-  return db.select<RecurringEntry[]>(
-    `SELECT * FROM recurring_entries WHERE company_id = $1
-     ORDER BY active DESC, next_run_date ASC`,
-    [companyId],
-  );
-}
-
 export async function createRecurring(data: NewRecurring): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
@@ -61,22 +50,6 @@ export async function createRecurring(data: NewRecurring): Promise<number> {
     ],
   );
   return result.lastInsertId!;
-}
-
-export async function setRecurringActive(
-  id: number,
-  active: boolean,
-): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `UPDATE recurring_entries SET active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-    [active ? 1 : 0, id],
-  );
-}
-
-export async function deleteRecurring(id: number): Promise<void> {
-  const db = await getDb();
-  await db.execute("DELETE FROM recurring_entries WHERE id = $1", [id]);
 }
 
 // --- snapshot builders: turn an existing entry into a reusable payload ---

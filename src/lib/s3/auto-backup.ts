@@ -17,13 +17,6 @@ export function startAutoBackupScheduler(): void {
   timerId = setInterval(checkAndBackup, CHECK_INTERVAL_MS);
 }
 
-export function stopAutoBackupScheduler(): void {
-  if (timerId) {
-    clearInterval(timerId);
-    timerId = null;
-  }
-}
-
 /**
  * Categorise a thrown value into a typed reason string. The string is
  * persisted to settings_s3.last_auto_backup_error so the dashboard can

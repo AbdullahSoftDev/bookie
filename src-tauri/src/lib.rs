@@ -2674,24 +2674,6 @@ fn get_s3_credentials() -> Result<S3Credentials, BookieError> {
     }
 }
 
-#[tauri::command(async)]
-fn delete_s3_credentials() -> Result<(), BookieError> {
-    info!("Deleting S3 credentials from keyring");
-    // `?` uses `From<keyring_core::error::Error>` -> `KeyringUnavailable`.
-    let entry = keyring_core::Entry::new(KEYRING_SERVICE, KEYRING_USER)?;
-
-    match entry.delete_credential() {
-        Ok(()) => {
-            info!("S3 credentials deleted successfully");
-            Ok(())
-        }
-        // Idempotent semantics: deleting an absent entry is a no-op success,
-        // matching the previous behaviour.
-        Err(keyring_core::error::Error::NoEntry) => Ok(()),
-        Err(e) => Err(BookieError::from(e)),
-    }
-}
-
 #[cfg(test)]
 mod pure_helper_tests {
     use super::{is_sqlite_backup, sha256_hex, validate_restore_bytes, SQLITE_MAGIC};
@@ -3838,7 +3820,6 @@ pub fn run() {
             s3_presign_download_url,
             store_s3_credentials,
             get_s3_credentials,
-            delete_s3_credentials,
             append_frontend_log,
             read_log_tail,
             schema_version_check,

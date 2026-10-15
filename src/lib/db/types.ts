@@ -140,16 +140,6 @@ export interface Payment {
   updated_at: string;
 }
 
-export interface InvoiceStatusHistory {
-  id: number;
-  invoice_id: number;
-  from_status: string | null;
-  to_status: string;
-  changed_at: string;
-  changed_by: string | null;
-  note: string | null;
-}
-
 export interface OrganizationSettings {
   id: number;
   name: string;
@@ -186,12 +176,6 @@ export interface OrganizationSettings {
  * selection so it can be persisted and surfaced in the UI.
  */
 export type EInvoiceFormat = "plain" | "zugferd" | "xrechnung";
-
-export const EINVOICE_FORMATS: readonly EInvoiceFormat[] = [
-  "plain",
-  "zugferd",
-  "xrechnung",
-] as const;
 
 export interface InvoiceSettings {
   id: number;

@@ -28,15 +28,13 @@
       "s3_presign_download_url",
       "store_s3_credentials",
       "get_s3_credentials",
-      "delete_s3_credentials",
       "append_frontend_log",
       "read_log_tail",
       "schema_version_check",
       "boot_check"
     ],
     "registered_but_unused_by_spa": [
-      "restore_db_backup",
-      "delete_s3_credentials"
+      "restore_db_backup"
     ]
   },
   "commands": [

@@ -17,10 +17,6 @@ export function setLocale(l: Locale) {
 	currentLocale = l;
 }
 
-export function getLocale(): Locale {
-	return currentLocale;
-}
-
 export function getLocaleFormatting(): string {
 	return currentLocale === 'de' ? 'de-DE' : 'en-US';
 }
