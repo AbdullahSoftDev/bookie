@@ -1,118 +1,73 @@
 /// <reference types="bun" />
 //
-// SEC-4.c (issue #190): least-privilege verification for
-// `src-tauri/capabilities/default.json` post-pruning.
-//
-// SEC-4.b (PR #208) produced `over_permissive.json` listing the aggregates
-// (`dialog:default`, `opener:default`, `sql:default`) that `default.json`
-// granted but the SPA did not exercise. SEC-4.c consumes that artifact:
-// removes the over-permissive aggregates and explicitly re-adds the
-// narrower permissions they were transitively granting.
-//
-// This test enforces the two invariants SEC-4.c must uphold so the
-// least-privilege state cannot regress silently:
-//
-//   1. Coverage: every permission the SPA actually uses
-//      (`inventory.permissions_used`) is explicitly granted by
-//      `default.json`. If this fails, the SPA will hit a Tauri
-//      permission-denied error at runtime on the corresponding call site.
-//
-//   2. Tightness: no over-permissive aggregate (anything ending in
-//      `:default` other than `core:default`) is granted by `default.json`.
-//      `core:default` is exempt because Tauri v2 requires it to gate the
-//      custom `#[tauri::command]` handlers registered via
-//      `generate_handler!` (see inventory.json `custom_commands`).
-//
-// If a future change exercises a new permission, the SEC-4.a inventory
-// must be updated alongside `default.json` and this test will keep the two
-// in sync.
+// Least-privilege tripwire for `src-tauri/capabilities/default.json`: every
+// granted permission must be exercised by a call site in `src/`, and every
+// call site's permission must be granted. Custom `#[tauri::command]`s ride on
+// `core:default`, so instead each `invoke("<cmd>")` literal must be a command
+// registered in `generate_handler!`.
 
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
+import { Glob } from "bun";
 import { join, resolve } from "node:path";
 
 const REPO_ROOT = resolve(__dirname, "..", "..");
-const CAPS_DIR = join(REPO_ROOT, "src-tauri", "capabilities");
-const DEFAULT_PATH = join(CAPS_DIR, "default.json");
-const INVENTORY_PATH = join(CAPS_DIR, "inventory.json");
-
-type ScopedPermission = { identifier: string };
-type PermissionEntry = string | ScopedPermission;
-
-function permissionId(entry: PermissionEntry): string {
-  if (typeof entry === "string") return entry;
-  if (
-    entry &&
-    typeof entry === "object" &&
-    typeof entry.identifier === "string"
-  )
-    return entry.identifier;
-  throw new Error(
-    `default.json contains a permission entry of unknown shape: ${JSON.stringify(entry)}`,
+const defaultCap: { permissions: (string | { identifier: string })[] } =
+  JSON.parse(
+    readFileSync(
+      join(REPO_ROOT, "src-tauri", "capabilities", "default.json"),
+      "utf8",
+    ),
   );
-}
-
-type DefaultCapability = {
-  identifier: string;
-  permissions: PermissionEntry[];
-};
-type Inventory = {
-  permissions_used: string[];
-};
-
-const defaultCap: DefaultCapability = JSON.parse(
-  readFileSync(DEFAULT_PATH, "utf8"),
+const granted = defaultCap.permissions.map((p) =>
+  typeof p === "string" ? p : p.identifier,
 );
-const inventory: Inventory = JSON.parse(readFileSync(INVENTORY_PATH, "utf8"));
 
-const grantedIds = new Set(defaultCap.permissions.map(permissionId));
-const usedIds = new Set(inventory.permissions_used);
+const src = [...new Glob("src/**/*.{ts,svelte}").scanSync(REPO_ROOT)]
+  .map((f) => readFileSync(join(REPO_ROOT, f), "utf8"))
+  .join("\n");
 
-test("default.json has the required identifier and permissions array", () => {
-  expect(defaultCap.identifier).toBe("default");
-  expect(Array.isArray(defaultCap.permissions)).toBe(true);
-  expect(defaultCap.permissions.length).toBeGreaterThan(0);
+// Permission -> pattern of the SPA call that needs it.
+const CALL_SITES: Record<string, RegExp> = {
+  "core:default": /\binvoke\s*[<(]/,
+  "core:window:allow-close": /getCurrentWindow\(\)\.close\(/,
+  "dialog:allow-open":
+    /import\s*{[^}]*\bopen\b[^}]*}\s*from\s*["']@tauri-apps\/plugin-dialog/,
+  "dialog:allow-save":
+    /import\s*{[^}]*\bsave\b[^}]*}\s*from\s*["']@tauri-apps\/plugin-dialog/,
+  "opener:allow-open-url": /\bopenUrl\(/,
+  "process:allow-restart": /\brelaunch\(/,
+  "sql:allow-execute": /\.execute\(/,
+  "sql:allow-load": /Database\.load\(/,
+  "sql:allow-select": /\.select</,
+  "updater:allow-check": /from\s*["']@tauri-apps\/plugin-updater/,
+  "updater:allow-download-and-install": /\.downloadAndInstall\(/,
+};
+
+test("granted permissions equal the permissions the SPA uses", () => {
+  const used = Object.keys(CALL_SITES).filter((p) => CALL_SITES[p].test(src));
+  expect([...granted].sort()).toEqual(used.sort());
 });
 
-test("every permission used by the SPA is explicitly granted by default.json (coverage)", () => {
-  // Any permission appearing in inventory.permissions_used must appear as a
-  // literal entry in default.json — no relying on transitive `*:default`
-  // aggregates after SEC-4.c.
-  const uncovered = inventory.permissions_used.filter(
-    (id) => !grantedIds.has(id),
+test("default.json permissions are sorted and unique", () => {
+  expect(granted).toEqual([...new Set(granted)].sort());
+});
+
+test("every invoked command is registered in generate_handler!", () => {
+  const lib = readFileSync(
+    join(REPO_ROOT, "src-tauri", "src", "lib.rs"),
+    "utf8",
   );
-  expect(uncovered).toEqual([]);
-});
-
-test("no over-permissive aggregate is granted by default.json (tightness)", () => {
-  // Per SEC-4.b, every `*:default` aggregate except `core:default` was
-  // flagged as granting permissions the SPA does not use. SEC-4.c must
-  // keep them out. `core:default` is exempt because it gates the 17 custom
-  // commands (see inventory.json `custom_commands.registered_in_handler`).
-  const overPermissiveAggregates = [...grantedIds].filter(
-    (id) => id.endsWith(":default") && id !== "core:default",
+  const handler = /generate_handler!\[([^\]]*)\]/.exec(lib)![1];
+  const registered = new Set(
+    handler
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
   );
-  expect(overPermissiveAggregates).toEqual([]);
-});
-
-test("default.json permissions list has no duplicates", () => {
-  const ids = defaultCap.permissions.map(permissionId);
-  const unique = new Set(ids);
-  expect(unique.size).toBe(ids.length);
-});
-
-test("default.json permissions list is sorted (stable diffs)", () => {
-  const ids = defaultCap.permissions.map(permissionId);
-  const sorted = [...ids].sort();
-  expect(ids).toEqual(sorted);
-});
-
-test("granted set equals used set exactly (no slack either direction)", () => {
-  // Post-SEC-4.c, `granted` and `used` should be identical: no extra
-  // permissions beyond what the SPA exercises, and no missing permissions.
-  // If this fails, either default.json has drifted over-permissive again,
-  // or a call site has been removed without pruning its permission.
-  const grantedSorted = [...grantedIds].sort();
-  const usedSorted = [...usedIds].sort();
-  expect(grantedSorted).toEqual(usedSorted);
+  const invoked = [
+    ...src.matchAll(/\binvoke(?:<[^>]*>)?\(\s*["'](\w+)["']/g),
+  ].map((m) => m[1]);
+  expect(invoked.length).toBeGreaterThan(0);
+  expect(invoked.filter((c) => !registered.has(c))).toEqual([]);
 });
