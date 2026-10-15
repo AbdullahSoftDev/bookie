@@ -1371,7 +1371,7 @@ fn validate_restore_bytes(bytes: &[u8]) -> Result<(), String> {
     if bytes.is_empty() {
         return Err("The uploaded file is empty.".to_string());
     }
-    if bytes.len() < 16 || &bytes[..16] != SQLITE_MAGIC {
+    if !is_sqlite_backup(bytes) {
         return Err("The file is not a valid SQLite database.".to_string());
     }
     Ok(())
