@@ -19,8 +19,13 @@ export class CloudError extends Error {
   constructor(
     public status: number,
     public code: string,
+    message = status === 402
+      ? "Kein aktives bookie Cloud Abo für dieses Unternehmen"
+      : status === 403
+        ? "Keine Berechtigung für diesen Bereich"
+        : `Server: ${status} ${code}`,
   ) {
-    super(`Server: ${status} ${code}`);
+    super(message);
   }
 }
 
@@ -40,6 +45,16 @@ async function request<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await res.json().catch(() => null);
+  // Only "unauthorized" means the session is gone; a 401 invalid_credentials
+  // (wrong current password on change / 2FA disable) must not sign out.
+  if (res.status === 401 && token && data?.error === "unauthorized") {
+    localStorage.removeItem(KEY);
+    throw new CloudError(
+      401,
+      "session_expired",
+      "Sitzung abgelaufen, bitte neu anmelden",
+    );
+  }
   if (!res.ok) throw new CloudError(res.status, data?.error ?? res.statusText);
   return data as T;
 }
@@ -77,6 +92,14 @@ export function resource<T>(name: string) {
   };
 }
 
+/** Unauthenticated call (register, password reset mail). */
+export const publicApi = <T>(url: string, path: string, body: unknown) =>
+  request<T>(url.replace(/\/+$/, ""), path, "POST", body);
+
+/** The server takes a 6-digit TOTP as `code`, anything else as `recoveryCode`. */
+export const secondFactor = (code: string) =>
+  /^\d{6}$/.test(code.trim()) ? { code: code.trim() } : { recoveryCode: code };
+
 /** Returns "mfa" when the account has 2FA and no code was given. */
 export async function login(
   url: string,
@@ -95,7 +118,7 @@ export async function login(
     if (!code) return "mfa";
     r = await request(url, "/auth/login/totp", "POST", {
       mfaToken: r.mfaToken,
-      code,
+      ...secondFactor(code),
     });
   }
   localStorage.setItem(KEY, JSON.stringify({ url, token: r.token, email }));
@@ -112,7 +135,7 @@ export type Me = {
   companies: {
     id: number;
     name: string;
-    role: "admin" | "member";
+    role: "admin" | "member" | "subcontractor";
     paid: boolean;
   }[];
 };

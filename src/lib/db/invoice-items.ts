@@ -1,3 +1,4 @@
+import { api, cloud } from "$lib/cloud";
 import { getDb, safeFields } from "./connection";
 import type { InvoiceItem } from "./types";
 
@@ -30,6 +31,17 @@ export async function listByInvoice(
   // COUNT(*) OVER() computes the total in a single pass without a second round-trip.
   const limit = opts?.limit ?? 200;
   const offset = opts?.offset ?? 0;
+  if (cloud()) {
+    // Items come with the invoice; single-item writes don't exist remotely
+    // (syncInvoiceItems in invoices.ts replaces the whole list).
+    const { items } = await api<{ items: InvoiceItem[] }>(
+      `/api/invoices/${invoiceId}`,
+    );
+    return {
+      rows: items.slice(offset, offset + limit),
+      totalCount: items.length,
+    };
+  }
   const db = await getDb();
   const raw = await db.select<(InvoiceItem & { _total_count: number })[]>(
     `SELECT *, COUNT(*) OVER() AS _total_count

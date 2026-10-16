@@ -11,6 +11,11 @@ export async function getDb(): Promise<Database> {
   // Modules ported to the server branch on cloud() before getting here; the
   // rest must not mix local rows with cloud ids.
   if (cloud()) throw new Error("In bookie Cloud noch nicht verfügbar");
+  return getLocalDb();
+}
+
+/** The local SQLite file even in cloud mode. Only for the one-time cloud import (read-only use). */
+export async function getLocalDb(): Promise<Database> {
   if (!db) {
     log.info("Establishing database connection");
     db = await Database.load(DB_URL);

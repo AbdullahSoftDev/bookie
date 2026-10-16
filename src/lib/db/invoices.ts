@@ -1,3 +1,4 @@
+import { api, cloud, resource } from "$lib/cloud";
 import { getDb, withTransaction, safeFields } from "./connection";
 import { assertOutsideRetention } from "./retention";
 import {
@@ -89,6 +90,75 @@ export interface PageResult<T> {
   totalCount: number;
 }
 
+// Cloud: money is integer cents on both sides, so no unit conversion. The
+// server owns numbers, totals, status, the issuer snapshot and storno columns;
+// the client sends only these header fields and the raw items.
+const REMOTE_HEADER = [
+  "customer_id",
+  "project_id",
+  "issue_date",
+  "due_date",
+  "delivery_date",
+  "service_period_start",
+  "service_period_end",
+  "currency",
+  "recipient_name",
+  "recipient_street",
+  "recipient_postal_code",
+  "recipient_city",
+  "recipient_country_code",
+  "buyer_reference",
+  "notes",
+  "language",
+  "legal_country_code",
+  "due_surcharge",
+] as const;
+const remote = resource<InvoiceWithCustomer>("invoices");
+const toRemote = (data: UpdateInvoice) =>
+  Object.fromEntries(safeFields(data, REMOTE_HEADER));
+// Drafts carry a server placeholder number ("draft-<uuid>") until /issue.
+const fromRemote = <T extends Invoice>({
+  items: _,
+  ...inv
+}: T & { items?: unknown }) =>
+  (inv.status === "draft" && inv.invoice_number.startsWith("draft-")
+    ? { ...inv, invoice_number: "" }
+    : inv) as T;
+const remoteItems = (items: InvoiceItemInput[]) =>
+  items.map(
+    ({
+      position,
+      description,
+      quantity,
+      unit,
+      unit_price_net_cents,
+      tax_rate,
+    }) => ({
+      position,
+      description,
+      quantity,
+      unit,
+      unit_price_net_cents,
+      tax_rate,
+    }),
+  );
+
+/** Cloud: the status moves the server allows (draft -> sent is the issue step). */
+const CLOUD_MOVES: Record<string, string[]> = {
+  draft: ["sent"],
+  sent: ["paid", "void"],
+  paid: ["sent"],
+};
+export const canChangeStatus = (from: string, to: string) =>
+  !cloud() || from === to || (CLOUD_MOVES[from]?.includes(to) ?? false);
+
+/** Cloud only: draft -> sent; the server assigns the number and snapshots issuer + recipient. */
+export async function issueInvoice(id: number): Promise<Invoice> {
+  return fromRemote(
+    await api<Invoice>(`/api/invoices/${id}/issue`, "POST", {}),
+  );
+}
+
 export async function listInvoices(
   companyId: number,
   opts?: { limit?: number; offset?: number },
@@ -96,6 +166,10 @@ export async function listInvoices(
   // COUNT(*) OVER() computes the total in a single pass without a second round-trip.
   const limit = opts?.limit ?? 200;
   const offset = opts?.offset ?? 0;
+  if (cloud()) {
+    const page = await remote.page(limit, offset);
+    return { ...page, rows: page.rows.map(fromRemote) };
+  }
   const db = await getDb();
   const raw = await db.select<(Invoice & { _total_count: number })[]>(
     `SELECT *, COUNT(*) OVER() AS _total_count
@@ -109,6 +183,10 @@ export async function listInvoices(
 }
 
 export async function getInvoiceById(id: number): Promise<Invoice | undefined> {
+  if (cloud()) {
+    const inv = await remote.get(id);
+    return inv && fromRemote(inv);
+  }
   const db = await getDb();
   const rows = await db.select<Invoice[]>(
     "SELECT * FROM invoices WHERE id = $1",
@@ -118,6 +196,7 @@ export async function getInvoiceById(id: number): Promise<Invoice | undefined> {
 }
 
 export async function createInvoice(data: CreateInvoice): Promise<number> {
+  if (cloud()) return remote.create(toRemote(data)); // always a draft, items via syncInvoiceItems
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO invoices (company_id, customer_id, project_id, invoice_number, status, issue_date, due_date, service_period_start, service_period_end, currency, net_cents, tax_cents, gross_cents, issuer_name, issuer_tax_number, issuer_vat_id, issuer_bank_account_holder, issuer_bank_iban, issuer_bank_bic, issuer_bank_name, recipient_name, recipient_street, recipient_postal_code, recipient_city, recipient_country_code, notes, buyer_reference)
@@ -159,6 +238,11 @@ export async function updateInvoice(
   id: number,
   data: UpdateInvoice,
 ): Promise<void> {
+  if (cloud()) {
+    const patch = toRemote(data);
+    // s3_key-only updates have nothing to send (S3 archival is desktop-only).
+    return Object.keys(patch).length ? remote.update(id, patch) : undefined;
+  }
   const fields = safeFields(data, ALLOWED_COLUMNS);
   if (fields.length === 0) return;
 
@@ -207,6 +291,8 @@ export async function syncInvoiceItems(
   items: InvoiceItemInput[],
   existing: InvoiceItem[] = [],
 ): Promise<void> {
+  // Cloud: PATCH items replaces all of them; the server computes line totals.
+  if (cloud()) return remote.update(invoiceId, { items: remoteItems(items) });
   const keep = new Set(items.map((i) => i.id));
   for (const old of existing) {
     if (!keep.has(old.id)) await deleteInvoiceItem(old.id);
@@ -233,6 +319,7 @@ export async function syncInvoiceItems(
 }
 
 export async function deleteInvoice(id: number): Promise<void> {
+  if (cloud()) return remote.remove(id); // server: drafts only, else 409 invoice_immutable
   // GoBD pre-check (DAT-2.b): refuse delete on issued invoices before the
   // SQL trigger (DAT-2.a, migration 0020) does. Missing-row case falls
   // through to the DELETE (which is a no-op).
@@ -267,6 +354,10 @@ export async function listAllInvoices(opts?: {
   // COUNT(*) OVER() computes the total in a single pass without a second round-trip.
   const limit = opts?.limit ?? 200;
   const offset = opts?.offset ?? 0;
+  if (cloud()) {
+    const page = await remote.page(limit, offset);
+    return { ...page, rows: page.rows.map(fromRemote) };
+  }
   const db = await getDb();
   const raw = await db.select<
     (InvoiceWithCustomer & { _total_count: number })[]
@@ -296,6 +387,14 @@ export async function listInvoiceSearchItems(
   companyId: number,
   limit = 500,
 ): Promise<InvoiceSearchItem[]> {
+  if (cloud())
+    return (await remote.page(limit, 0)).rows
+      .map(fromRemote)
+      .map(({ id, invoice_number, customer_name }) => ({
+        id,
+        invoice_number,
+        customer_name,
+      }));
   const db = await getDb();
   return db.select<InvoiceSearchItem[]>(
     `SELECT i.id, i.invoice_number, c.name AS customer_name
@@ -312,6 +411,14 @@ export async function updateInvoiceStatus(
   fromStatus: string | null,
   toStatus: string,
 ): Promise<void> {
+  if (cloud()) {
+    if (fromStatus === "draft" && toStatus === "sent")
+      return void (await issueInvoice(id));
+    // paid_date: the server stamps today on -> paid and clears it on paid -> sent.
+    return void (await api(`/api/invoices/${id}/status`, "POST", {
+      status: toStatus,
+    }));
+  }
   await withTransaction(async (db) => {
     // paid_date carries the Zufluss date (§ 11 EStG) for the EÜR: stamped on
     // the transition into 'paid' (kept if already set), cleared on the way
@@ -344,6 +451,9 @@ export async function updateInvoicePaidDate(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(paidDate)) {
     throw new Error(`Ungültiges Zahlungsdatum: ${paidDate}`);
   }
+  // ponytail: the server has no paid_date correction endpoint; add one before enabling this in cloud.
+  if (cloud())
+    throw new Error("Zahlungsdatum kann in bookie Cloud nicht geändert werden");
   const db = await getDb();
   const res = await db.execute(
     `UPDATE invoices
@@ -394,6 +504,12 @@ export async function cancelInvoice(
   id: number,
   reason: string,
 ): Promise<number> {
+  if (cloud())
+    return (
+      await api<{ id: number }>(`/api/invoices/${id}/storno`, "POST", {
+        reason,
+      })
+    ).id;
   const original = await getInvoiceById(id);
   if (!original) {
     throw new Error(`Invoice with id ${id} not found`);

@@ -9,6 +9,7 @@
 	import { deleteFile } from '$lib/s3/client';
 	import { createLogger } from '$lib/logger';
 	import { t } from '$lib/i18n';
+	import { cloud } from '$lib/cloud';
 	import type { Invoice, InvoiceItem } from '$lib/db/types';
 
 	const log = createLogger('rechnungen-edit');
@@ -56,7 +57,7 @@
 			};
 		});
 		const id = invoice.id;
-		await withTransaction(async () => {
+		const save = async () => {
 			// DAT-1.d: float totals are converted to integer cents at the DB boundary.
 			await updateInvoice(id, {
 				customer_id: data.customerId,
@@ -83,7 +84,10 @@
 			});
 
 			await syncInvoiceItems(id, items, existingItems);
-		});
+		};
+		// Cloud: header PATCH (server ignores number/issuer/totals) + items PATCH.
+		if (cloud()) await save();
+		else await withTransaction(save);
 
 		await goto('/rechnungen');
 	}
@@ -93,7 +97,8 @@
 		if (!confirm(t('invoices.deleteConfirm'))) return;
 		deleting = true;
 
-		try {
+		// S3 archival is desktop-only; nothing was uploaded in cloud mode.
+		if (!cloud()) try {
 			const s3Config = await getS3Settings();
 			if (s3Config.enabled) {
 				const key = invoice.s3_key
@@ -189,6 +194,7 @@
 				tax_rate: String(i.tax_rate)
 			}))}
 			readonly={!isDraft}
+			snapshot={cloud() && !isDraft ? invoice : null}
 			onSave={handleSave}
 			onS3KeyUpdate={(key) => {
 				if (invoice) {

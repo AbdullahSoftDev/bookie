@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { listAllInvoices, updateInvoiceStatus, updateInvoicePaidDate, type InvoiceWithCustomer } from '$lib/db/invoices';
+	import { listAllInvoices, updateInvoiceStatus, updateInvoicePaidDate, canChangeStatus, type InvoiceWithCustomer } from '$lib/db/invoices';
+	import { cloud } from '$lib/cloud';
 	import { t, tp } from '$lib/i18n';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
@@ -44,7 +45,13 @@
 		e.stopPropagation();
 		const newStatus = (e.currentTarget as HTMLSelectElement).value;
 		if (newStatus === invoice.status) return;
-		await updateInvoiceStatus(invoice.id, invoice.status, newStatus);
+		try {
+			await updateInvoiceStatus(invoice.id, invoice.status, newStatus);
+		} catch (err) {
+			if (!cloud()) throw err;
+			// e.g. issuing a draft without items (400 no_items) or a lapsed subscription (402)
+			alert(err instanceof Error ? err.message : String(err));
+		}
 		// Reload so the row reflects DB-side effects (paid_date stamp/clear).
 		await loadInvoices(pager.page, pager.size);
 	}
@@ -129,7 +136,7 @@
 						class="grid cursor-pointer items-center border-b border-zinc-100 text-sm text-zinc-700 transition hover:bg-zinc-50 last:border-0 dark:border-zinc-700/70 dark:text-zinc-200 dark:hover:bg-zinc-700/30"
 						style="grid-template-columns: 1.1fr 1.4fr 1fr 1fr 1.2fr; min-height: 44px"
 					>
-						<div class="truncate px-4 py-2">{invoice.invoice_number}</div>
+						<div class="truncate px-4 py-2">{invoice.invoice_number || '—'}</div>
 						<div class="truncate px-4 py-2">{invoice.customer_name ?? '—'}</div>
 						<div class="truncate px-4 py-2">{formatDate(invoice.issue_date)}</div>
 						<div class="truncate px-4 py-2">{formatAmount(invoice.gross_cents / 100, invoice.currency)}</div>
@@ -142,7 +149,7 @@
 								onchange={(e) => changeStatus(e, invoice)}
 							>
 								{#each STATUSES as s}
-									<option value={s.value}>{s.label}</option>
+									<option value={s.value} disabled={!canChangeStatus(invoice.status, s.value)}>{s.label}</option>
 								{/each}
 							</select>
 							{#if invoice.status === 'paid'}
@@ -151,6 +158,7 @@
 									aria-label={t('invoices.paidDate')}
 									title={t('invoices.paidDate')}
 									value={invoice.paid_date ?? ''}
+									disabled={!!cloud()}
 									onclick={(e) => e.stopPropagation()}
 									onchange={(e) => changePaidDate(e, invoice)}
 									class="mt-1 block rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"

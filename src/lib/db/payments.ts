@@ -1,3 +1,4 @@
+import { api, cloud } from "$lib/cloud";
 import { getDb } from "./connection";
 import { assertOutsideRetention } from "./retention";
 import type { Payment } from "./types";
@@ -18,6 +19,13 @@ export async function listByInvoice(
   // COUNT(*) OVER() computes the total in a single pass without a second round-trip.
   const limit = opts?.limit ?? 200;
   const offset = opts?.offset ?? 0;
+  if (cloud()) {
+    const rows = await api<Payment[]>(`/api/invoices/${invoiceId}/payments`);
+    return {
+      rows: rows.slice(offset, offset + limit),
+      totalCount: rows.length,
+    };
+  }
   const db = await getDb();
   const raw = await db.select<(Payment & { _total_count: number })[]>(
     `SELECT *, COUNT(*) OVER() AS _total_count
@@ -31,6 +39,17 @@ export async function listByInvoice(
 }
 
 export async function createPayment(data: CreatePayment): Promise<number> {
+  if (cloud()) {
+    // Server: sent/paid invoices only; flips to paid once fully paid.
+    const { invoice_id, ...body } = data;
+    return (
+      await api<{ id: number }>(
+        `/api/invoices/${invoice_id}/payments`,
+        "POST",
+        body,
+      )
+    ).id;
+  }
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO payments (invoice_id, payment_date, amount_cents, method, reference, note)
@@ -47,7 +66,18 @@ export async function createPayment(data: CreatePayment): Promise<number> {
   return result.lastInsertId!;
 }
 
-export async function deletePayment(id: number): Promise<void> {
+/** `invoiceId` is required in cloud mode (the route is nested under the invoice). */
+export async function deletePayment(
+  id: number,
+  invoiceId?: number,
+): Promise<void> {
+  if (cloud()) {
+    if (invoiceId == null) throw new Error("deletePayment: invoiceId fehlt");
+    return void (await api(
+      `/api/invoices/${invoiceId}/payments/${id}`,
+      "DELETE",
+    ));
+  }
   const db = await getDb();
   // COMP-1.a (#90): GoBD retention guard. A payment is a booking-relevant
   // record and must be retained for the parent invoice's legal-profile

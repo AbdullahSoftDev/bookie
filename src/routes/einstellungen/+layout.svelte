@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/state';
 	import { t } from '$lib/i18n';
+	import { cloud } from '$lib/cloud';
 
 	let { children }: { children: Snippet } = $props();
 
@@ -12,7 +13,8 @@
 		{ get label() { return t('settings.backup'); }, href: '/einstellungen/backup' },
 		{ get label() { return t('settings.s3Storage'); }, href: '/einstellungen/s3' },
 		{ get label() { return t('settings.diagnose'); }, href: '/einstellungen/diagnose' },
-		{ label: 'Cloud', href: '/einstellungen/cloud' }
+		{ label: 'Cloud', href: '/einstellungen/cloud' },
+		...(cloud() ? [{ label: 'Team', href: '/einstellungen/team' }] : [])
 	];
 </script>
 

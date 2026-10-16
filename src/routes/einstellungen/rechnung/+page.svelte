@@ -52,9 +52,14 @@
 		form.days_till_due = Number(daysTillDue) || 0;
 		form.due_surcharge = Number(dueSurcharge) || 0;
 		form.invoice_number_incrementor = Math.max(1, Number(incrementor) || 1);
-		await saveInvoiceSettings(form);
-		feedback = t('settings.invoiceSaved');
-		saving = false;
+		try {
+			await saveInvoiceSettings(form);
+			feedback = t('settings.invoiceSaved');
+		} catch (err) {
+			feedback = err instanceof Error ? err.message : String(err);
+		} finally {
+			saving = false;
+		}
 	}
 </script>
 

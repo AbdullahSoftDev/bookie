@@ -7,6 +7,7 @@
 	import { snapshotInvoice, createRecurring } from '$lib/db/recurring';
 	import { advance } from '$lib/recurrence';
 	import { t } from '$lib/i18n';
+	import { cloud } from '$lib/cloud';
 
 	let lastCreatedInvoiceId = $state<number | null>(null);
 	let recurring = $state(false);
@@ -25,7 +26,7 @@
 				line_total_net_cents: Math.round(quantity * unitPriceNet * 100)
 			};
 		});
-		const invoiceId = await withTransaction(async () => {
+		const save = async () => {
 			// DAT-1.d: convert float totals to integer cents at the DB boundary.
 			const id = await createInvoice({
 				company_id: data.company.id,
@@ -64,13 +65,19 @@
 
 			await syncInvoiceItems(id, items);
 			return id;
-		});
+		};
+		// Cloud: a draft (POST) plus its items (PATCH); the server keeps totals,
+		// assigns the number on issue and bumps the incrementor itself.
+		// ponytail: two requests, a failed item save leaves an empty (deletable) draft.
+		const invoiceId = cloud() ? await save() : await withTransaction(save);
 
-		const settings = await getInvoiceSettings();
-		await saveInvoiceSettings({
-			...settings,
-			invoice_number_incrementor: settings.invoice_number_incrementor + 1
-		});
+		if (!cloud()) {
+			const settings = await getInvoiceSettings();
+			await saveInvoiceSettings({
+				...settings,
+				invoice_number_incrementor: settings.invoice_number_incrementor + 1
+			});
+		}
 
 		// Recurring: snapshot this invoice and schedule the next copy one month
 		// out on the same day. The boot generator (see +layout) materialises it.
@@ -107,10 +114,13 @@
 		</a>
 	</header>
 
+	<!-- Recurring invoices are not on bookie-server yet. -->
+	{#if !cloud()}
 	<label class="flex w-fit items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200">
 		<input type="checkbox" bind:checked={recurring} class="h-4 w-4 rounded border-zinc-300" />
 		{t('common.recurringMonthly')}
 	</label>
+	{/if}
 
 	<InvoiceForm
 		mode="create"
