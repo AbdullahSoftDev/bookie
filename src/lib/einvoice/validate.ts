@@ -68,8 +68,6 @@ export function validateInvoiceXmlData(
     err(isBlank(d.currency) ? "missing" : "invalid", "currency", "BR-5");
   if (isBlank(d.dueDate)) err("missing", "dueDate", "BR-CO-25");
   else if (!isValidIsoDate(d.dueDate)) err("invalid", "dueDate", "BR-CO-25");
-  if (xr && isBlank(d.buyerReference))
-    err("missing", "buyerReference", "BR-DE-15");
 
   // --- Seller ---
   const s = d.seller;
