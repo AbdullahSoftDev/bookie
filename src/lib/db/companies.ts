@@ -1,3 +1,4 @@
+import { api, cloud } from "$lib/cloud";
 import { getDb, safeFields } from "./connection";
 import type { Company } from "./types";
 
@@ -19,12 +20,21 @@ const ALLOWED_COLUMNS = [
   "bank_name",
 ] as const;
 
+// In cloud mode the app only sees the session's active company; creating one
+// makes it active, so the rest of the app keeps using companies[0].
 export async function listCompanies(): Promise<Company[]> {
+  if (cloud()) {
+    const me = await api<{ activeCompanyId: number | null }>("/me");
+    return me.activeCompanyId == null
+      ? []
+      : [await api<Company>("/api/company")];
+  }
   const db = await getDb();
   return db.select("SELECT * FROM companies ORDER BY name");
 }
 
 export async function getCompanyById(id: number): Promise<Company | undefined> {
+  if (cloud()) return (await listCompanies()).find((c) => c.id === id);
   const db = await getDb();
   const rows = await db.select<Company[]>(
     "SELECT * FROM companies WHERE id = $1",
@@ -34,6 +44,12 @@ export async function getCompanyById(id: number): Promise<Company | undefined> {
 }
 
 export async function createCompany(data: CreateCompany): Promise<number> {
+  // Only the name: the new company is unpaid until checkout, and the API
+  // refuses everything else (402) until then.
+  if (cloud())
+    return (
+      await api<{ id: number }>("/companies", "POST", { name: data.name })
+    ).id;
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO companies (name, legal_name, street, postal_code, city, country_code, tax_number, vat_id, bank_account_holder, bank_iban, bank_bic, bank_name)
@@ -60,6 +76,7 @@ export async function updateCompany(
   id: number,
   data: UpdateCompany,
 ): Promise<void> {
+  if (cloud()) return void (await api("/api/company", "PATCH", data));
   const fields = safeFields(data, ALLOWED_COLUMNS);
   if (fields.length === 0) return;
 
@@ -76,6 +93,8 @@ export async function updateCompany(
 }
 
 export async function deleteCompany(id: number): Promise<void> {
+  if (cloud())
+    throw new Error("Firmen in bookie Cloud werden über das Konto verwaltet");
   const db = await getDb();
   await db.execute("DELETE FROM companies WHERE id = $1", [id]);
 }

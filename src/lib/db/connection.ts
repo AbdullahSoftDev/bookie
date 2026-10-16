@@ -1,4 +1,5 @@
 import Database from "@tauri-apps/plugin-sql";
+import { cloud } from "$lib/cloud";
 import { createLogger } from "$lib/logger";
 
 const log = createLogger("db");
@@ -7,6 +8,9 @@ const DB_URL = "sqlite:bookie.db";
 let db: Database | null = null;
 
 export async function getDb(): Promise<Database> {
+  // Modules ported to the server branch on cloud() before getting here; the
+  // rest must not mix local rows with cloud ids.
+  if (cloud()) throw new Error("In bookie Cloud noch nicht verfügbar");
   if (!db) {
     log.info("Establishing database connection");
     db = await Database.load(DB_URL);

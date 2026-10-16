@@ -1,3 +1,4 @@
+import { cloud, resource } from "$lib/cloud";
 import { getDb, safeFields } from "./connection";
 import type { Customer } from "./types";
 
@@ -20,7 +21,10 @@ const ALLOWED_COLUMNS = [
   "type",
 ] as const;
 
+const remote = resource<Customer>("customers");
+
 export async function listCustomers(companyId: number): Promise<Customer[]> {
+  if (cloud()) return remote.list();
   const db = await getDb();
   return db.select(
     "SELECT * FROM customers WHERE company_id = $1 ORDER BY name",
@@ -29,6 +33,7 @@ export async function listCustomers(companyId: number): Promise<Customer[]> {
 }
 
 export async function listSuppliers(companyId: number): Promise<Customer[]> {
+  if (cloud()) return (await remote.list()).filter((c) => c.type !== "kunde");
   const db = await getDb();
   return db.select(
     "SELECT * FROM customers WHERE company_id = $1 AND type IN ('lieferant', 'beides') ORDER BY name",
@@ -37,6 +42,8 @@ export async function listSuppliers(companyId: number): Promise<Customer[]> {
 }
 
 export async function listClients(companyId: number): Promise<Customer[]> {
+  if (cloud())
+    return (await remote.list()).filter((c) => c.type !== "lieferant");
   const db = await getDb();
   return db.select(
     "SELECT * FROM customers WHERE company_id = $1 AND type IN ('kunde', 'beides') ORDER BY name",
@@ -47,6 +54,7 @@ export async function listClients(companyId: number): Promise<Customer[]> {
 export async function getCustomerById(
   id: number,
 ): Promise<Customer | undefined> {
+  if (cloud()) return remote.get(id);
   const db = await getDb();
   const rows = await db.select<Customer[]>(
     "SELECT * FROM customers WHERE id = $1",
@@ -56,6 +64,7 @@ export async function getCustomerById(
 }
 
 export async function createCustomer(data: CreateCustomer): Promise<number> {
+  if (cloud()) return remote.create(data);
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO customers (company_id, customer_number, name, contact_name, email, phone, street, postal_code, city, country_code, vat_id, website, type)
@@ -83,6 +92,7 @@ export async function updateCustomer(
   id: number,
   data: UpdateCustomer,
 ): Promise<void> {
+  if (cloud()) return remote.update(id, data);
   const fields = safeFields(data, ALLOWED_COLUMNS);
   if (fields.length === 0) return;
 
@@ -99,6 +109,7 @@ export async function updateCustomer(
 }
 
 export async function deleteCustomer(id: number): Promise<void> {
+  if (cloud()) return remote.remove(id);
   const db = await getDb();
   await db.execute("DELETE FROM customers WHERE id = $1", [id]);
 }

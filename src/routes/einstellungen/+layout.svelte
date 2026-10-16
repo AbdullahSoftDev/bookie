@@ -11,7 +11,8 @@
 		{ get label() { return t('settings.vatTaxes'); }, href: '/einstellungen/mwst' },
 		{ get label() { return t('settings.backup'); }, href: '/einstellungen/backup' },
 		{ get label() { return t('settings.s3Storage'); }, href: '/einstellungen/s3' },
-		{ get label() { return t('settings.diagnose'); }, href: '/einstellungen/diagnose' }
+		{ get label() { return t('settings.diagnose'); }, href: '/einstellungen/diagnose' },
+		{ label: 'Cloud', href: '/einstellungen/cloud' }
 	];
 </script>
 

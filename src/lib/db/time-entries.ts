@@ -1,3 +1,4 @@
+import { cloud, resource } from "$lib/cloud";
 import { getDb, safeFields } from "./connection";
 import type { TimeEntry } from "./types";
 
@@ -16,6 +17,8 @@ const ALLOWED_COLUMNS = [
   "billable",
 ] as const;
 
+const remote = resource<TimeEntry>("time-entries");
+
 export interface PageResult<T> {
   rows: T[];
   totalCount: number;
@@ -28,6 +31,7 @@ export async function listTimeEntries(
   // COUNT(*) OVER() computes the total in a single pass without a second round-trip.
   const limit = opts?.limit ?? 200;
   const offset = opts?.offset ?? 0;
+  if (cloud()) return remote.page(limit, offset);
   const db = await getDb();
   const raw = await db.select<(TimeEntry & { _total_count: number })[]>(
     `SELECT *, COUNT(*) OVER() AS _total_count
@@ -45,6 +49,14 @@ export async function listTimesheetEntries(
   companyId: number,
   filter: { from?: string; to?: string; customerId?: number | null } = {},
 ): Promise<TimeEntry[]> {
+  if (cloud()) {
+    return (await remote.list()).filter(
+      (e) =>
+        (!filter.from || e.entry_date >= filter.from) &&
+        (!filter.to || e.entry_date <= filter.to) &&
+        (filter.customerId == null || e.customer_id === filter.customerId),
+    );
+  }
   const db = await getDb();
   return db.select<TimeEntry[]>(
     `SELECT * FROM time_entries
@@ -53,13 +65,19 @@ export async function listTimesheetEntries(
        AND ($3 IS NULL OR entry_date <= $3)
        AND ($4 IS NULL OR customer_id = $4)
      ORDER BY entry_date DESC`,
-    [companyId, filter.from || null, filter.to || null, filter.customerId ?? null],
+    [
+      companyId,
+      filter.from || null,
+      filter.to || null,
+      filter.customerId ?? null,
+    ],
   );
 }
 
 export async function getTimeEntryById(
   id: number,
 ): Promise<TimeEntry | undefined> {
+  if (cloud()) return remote.get(id);
   const db = await getDb();
   const rows = await db.select<TimeEntry[]>(
     "SELECT * FROM time_entries WHERE id = $1",
@@ -69,6 +87,7 @@ export async function getTimeEntryById(
 }
 
 export async function createTimeEntry(data: CreateTimeEntry): Promise<number> {
+  if (cloud()) return remote.create(data);
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO time_entries (company_id, customer_id, project_id, entry_date, started_at, ended_at, duration_minutes, description, billable)
@@ -92,6 +111,7 @@ export async function updateTimeEntry(
   id: number,
   data: UpdateTimeEntry,
 ): Promise<void> {
+  if (cloud()) return remote.update(id, data);
   const fields = safeFields(data, ALLOWED_COLUMNS);
   if (fields.length === 0) return;
 
@@ -108,6 +128,7 @@ export async function updateTimeEntry(
 }
 
 export async function deleteTimeEntry(id: number): Promise<void> {
+  if (cloud()) return remote.remove(id);
   const db = await getDb();
   await db.execute("DELETE FROM time_entries WHERE id = $1", [id]);
 }
