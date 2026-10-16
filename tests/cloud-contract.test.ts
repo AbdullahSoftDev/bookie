@@ -379,3 +379,44 @@ test.skipIf(!has)(
     }
   },
 );
+
+test.skipIf(!has)(
+  "customer DSGVO export bundle and refused erasure through the server",
+  async () => {
+    const { exportCustomerData } = await import("$lib/db/dsgvo_export");
+    const { anonymizeCustomer } = await import("$lib/db/dsgvo_erasure");
+    const sdb = await testDb();
+    const server = startServer(sdb, 0);
+    const [u] =
+      await sdb.sql`INSERT INTO users (email, name, password_hash) VALUES ('d@x.de', 'U', ${await hashPassword("x")}) RETURNING id`;
+    const [c] =
+      await sdb.sql`INSERT INTO companies (name, subscription_status) VALUES ('C', 'active') RETURNING id`;
+    await sdb.sql`INSERT INTO company_members (company_id, user_id, role) VALUES (${c.id}, ${u.id}, 'admin')`;
+    const [k] =
+      await sdb.sql`INSERT INTO customers (company_id, name, email) VALUES (${c.id}, 'Max', 'max@x.de') RETURNING id`;
+    await sdb.sql`INSERT INTO invoices (company_id, customer_id, invoice_number, status, issue_date, gross_cents) VALUES (${c.id}, ${k.id}, 'RE-1', 'sent', '2026-01-01', 100)`;
+    const token = await createSession(sdb, Number(u.id));
+    (globalThis as any).localStorage = {
+      getItem: () =>
+        JSON.stringify({ url: server.url.origin, token, email: "e" }),
+      removeItem() {},
+    };
+    try {
+      const { textEntries, binaryEntries } = await exportCustomerData(
+        Number(k.id),
+      );
+      const files = Object.fromEntries(textEntries);
+      expect(JSON.parse(files["customer.json"]!)).toMatchObject({
+        name: "Max",
+        email: "max@x.de",
+      });
+      expect(JSON.parse(files["invoices.json"]!)).toHaveLength(1);
+      expect(binaryEntries[0]![1].length).toBeGreaterThan(500); // the PDF
+      await expect(anonymizeCustomer(Number(k.id))).rejects.toMatchObject({
+        name: "RetentionViolation",
+      });
+    } finally {
+      server.stop(true);
+    }
+  },
+);
