@@ -2,15 +2,17 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import InvoiceForm, { type SaveData } from '../../../common/InvoiceForm.svelte';
-	import { getInvoiceById, updateInvoice, deleteInvoice, syncInvoiceItems } from '$lib/db/invoices';
+	import { getInvoiceById, updateInvoice, deleteInvoice, syncInvoiceItems, cancelInvoice } from '$lib/db/invoices';
 	import { listByInvoice } from '$lib/db/invoice-items';
+	import { listByInvoice as listPayments, createPayment, deletePayment } from '$lib/db/payments';
+	import { toasts } from '$lib/ui/toasts.svelte';
 	import { withTransaction } from '$lib/db/connection';
 	import { getS3Settings } from '$lib/db/settings';
 	import { deleteFile } from '$lib/s3/client';
 	import { createLogger } from '$lib/logger';
 	import { t } from '$lib/i18n';
 	import { cloud } from '$lib/cloud';
-	import type { Invoice, InvoiceItem } from '$lib/db/types';
+	import type { Invoice, InvoiceItem, Payment } from '$lib/db/types';
 
 	const log = createLogger('rechnungen-edit');
 
@@ -19,6 +21,11 @@
 	let loading = $state(true);
 	let notFound = $state(false);
 	let deleting = $state(false);
+	let payments = $state<Payment[]>([]);
+	let payAmount = $state('');
+	let payDate = $state(new Date().toISOString().slice(0, 10));
+	let payMethod = $state('Überweisung');
+	let busy = $state(false);
 
 	const invoiceId = $derived(Number($page.params.id));
 
@@ -36,6 +43,7 @@
 		}
 		invoice = inv;
 		existingItems = (await listByInvoice(id)).rows;
+		payments = inv.status === 'draft' ? [] : (await listPayments(id)).rows;
 		loading = false;
 	}
 
@@ -126,6 +134,53 @@
 	});
 
 	const isDraft = $derived(invoice?.status === 'draft');
+	// Server/desktop: only sent/paid originals can be stornoed or take payments; a storno itself cannot.
+	const isOpen = $derived(
+		(invoice?.status === 'sent' || invoice?.status === 'paid') && invoice?.references_invoice_id == null
+	);
+	const eur = (cents: number) => (cents / 100).toLocaleString('de-DE', { style: 'currency', currency: invoice?.currency || 'EUR' });
+	const paidCents = $derived(payments.reduce((s, p) => s + p.amount_cents, 0));
+
+	// Runs an action, reports failures, reloads the invoice (cloud may flip sent <-> paid).
+	async function act(fn: () => Promise<unknown>) {
+		busy = true;
+		try {
+			await fn();
+			await loadInvoice(invoiceId);
+		} catch (e) {
+			toasts.error(String((e as Error).message ?? e));
+		} finally {
+			busy = false;
+		}
+	}
+
+	function addPayment() {
+		const cents = Math.round(Number(payAmount.replace(',', '.')) * 100);
+		if (!invoice || !Number.isInteger(cents) || cents <= 0 || !payDate) {
+			toasts.error('Bitte Betrag und Datum angeben');
+			return;
+		}
+		const invoice_id = invoice.id;
+		return act(async () => {
+			await createPayment({ invoice_id, payment_date: payDate, amount_cents: cents, method: payMethod || null, reference: null, note: null });
+			payAmount = '';
+		});
+	}
+
+	async function handleStorno() {
+		if (!invoice) return;
+		const reason = prompt(`Rechnung ${invoice.invoice_number} stornieren? Grund:`)?.trim();
+		if (!reason) return;
+		busy = true;
+		try {
+			const stornoId = await cancelInvoice(invoice.id, reason);
+			await goto(`/rechnungen/${stornoId}`);
+		} catch (e) {
+			toasts.error(String((e as Error).message ?? e));
+		} finally {
+			busy = false;
+		}
+	}
 </script>
 
 <section class="space-y-6">
@@ -148,6 +203,11 @@
 						<span class="ml-2 text-xs text-zinc-400">{t('invoices.onlyDraftsEditable')}</span>
 					{/if}
 				</p>
+				{#if invoice.references_invoice_id != null}
+					<p class="text-sm text-zinc-600 dark:text-zinc-300">
+						Storno zu <a href="/rechnungen/{invoice.references_invoice_id}" class="text-blue-600 underline">Rechnung #{invoice.references_invoice_id}</a>{invoice.cancellation_reason ? ` — Grund: ${invoice.cancellation_reason}` : ''}
+					</p>
+				{/if}
 			</div>
 			<div class="flex gap-2">
 				{#if isDraft}
@@ -158,6 +218,16 @@
 						class="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 transition hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
 					>
 						{deleting ? t('common.deleting') : t('common.delete')}
+					</button>
+				{/if}
+				{#if isOpen}
+					<button
+						type="button"
+						onclick={handleStorno}
+						disabled={busy}
+						class="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 transition hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+					>
+						Stornieren
 					</button>
 				{/if}
 				<a
@@ -203,5 +273,57 @@
 				}
 			}}
 		/>
+
+		{#if !isDraft}
+			<div class="card space-y-3">
+				<div class="flex items-baseline justify-between">
+					<h2 class="text-lg font-semibold">Zahlungen</h2>
+					<span class="text-sm text-zinc-600 dark:text-zinc-300">
+						{eur(paidCents)} von {eur(invoice.gross_cents)} bezahlt
+					</span>
+				</div>
+				{#if payments.length === 0}
+					<p class="text-sm text-zinc-500 dark:text-zinc-400">Noch keine Zahlungen erfasst.</p>
+				{:else}
+					<ul class="divide-y divide-zinc-100 text-sm dark:divide-zinc-700">
+						{#each payments as p (p.id)}
+							<li class="flex items-center justify-between py-2">
+								<span>{p.payment_date} · {p.method ?? '—'}</span>
+								<span class="flex items-center gap-3">
+									{eur(p.amount_cents)}
+									<button
+										type="button"
+										class="text-xs text-red-600 hover:underline disabled:opacity-50 dark:text-red-400"
+										disabled={busy}
+										onclick={() => confirm('Zahlung löschen?') && act(() => deletePayment(p.id, p.invoice_id))}
+									>
+										{t('common.delete')}
+									</button>
+								</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+				{#if isOpen}
+					<div class="grid items-end gap-3 md:grid-cols-4">
+						<label class="text-sm">
+							<span class="label">Betrag (€)</span>
+							<input bind:value={payAmount} inputmode="decimal" placeholder={((invoice.gross_cents - paidCents) / 100).toFixed(2).replace('.', ',')} class="input-base" />
+						</label>
+						<label class="text-sm">
+							<span class="label">Datum</span>
+							<input type="date" bind:value={payDate} class="input-base" />
+						</label>
+						<label class="text-sm">
+							<span class="label">Zahlungsart</span>
+							<select bind:value={payMethod} class="input-base">
+								{#each ['Überweisung', 'Lastschrift', 'Bar', 'Karte', 'PayPal', 'Sonstiges'] as m}<option value={m}>{m}</option>{/each}
+							</select>
+						</label>
+						<button type="button" class="btn-primary" disabled={busy} onclick={addPayment}>Zahlung erfassen</button>
+					</div>
+				{/if}
+			</div>
+		{/if}
 	{/if}
 </section>

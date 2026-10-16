@@ -648,3 +648,25 @@ export async function cancelInvoice(
     return stornoId;
   });
 }
+
+/**
+ * Cloud only: a draft from the customer's approved, billable, not yet
+ * invoiced time entries (one item per entry, priced at the project's hourly
+ * rate). The server answers 400 no_entries when nothing matches.
+ * @returns the new draft's id.
+ */
+export async function createInvoiceFromTimeEntries(opts: {
+  customer_id: number;
+  project_id?: number | null;
+  from?: string | null;
+  to?: string | null;
+}): Promise<number> {
+  if (!cloud())
+    throw new Error("Rechnung aus Zeiteinträgen gibt es nur in bookie Cloud");
+  const body = Object.fromEntries(
+    Object.entries(opts).filter(([, v]) => v != null && v !== ""),
+  );
+  return (
+    await api<{ id: number }>("/api/invoices/from-time-entries", "POST", body)
+  ).id;
+}

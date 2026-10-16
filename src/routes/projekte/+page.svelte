@@ -5,7 +5,7 @@
 	import DateInput from '../../common/DateInput.svelte';
 	import { createCompany, listCompanies } from '$lib/db/companies';
 	import { listCustomers } from '$lib/db/customers';
-	import { createProject, listProjects, updateProject } from '$lib/db/projects';
+	import { createProject, hourlyRatePatch, listProjects, updateProject } from '$lib/db/projects';
 	import type { Customer, Project } from '$lib/db/types';
 	import { t } from '$lib/i18n';
 
@@ -21,11 +21,18 @@
 	let editingCustomerId = $state('');
 	let editingStartDate = $state('');
 	let editingEndDate = $state('');
+	let editingRate = $state('');
 
 	let name = $state('');
 	let customerId = $state('');
 	let startDate = $state('');
 	let endDate = $state('');
+	let rate = $state('');
+	// Cloud: members without invoices/reports grant get rates omitted, so a hidden one on any row means hidden for all.
+	const ratesHidden = $derived(projects.some((p) => p.hourly_rate_hidden));
+	const parseRate = (v: string) => (v.trim() ? Number(v.replace(',', '.')) || 0 : null);
+	const formatRate = (p: Project) =>
+		p.hourly_rate_hidden ? 'verborgen' : p.hourly_rate == null ? '—' : `${p.hourly_rate.toFixed(2).replace('.', ',')} €/h`;
 
 	const customerOptions = $derived.by(() => [
 		{ value: '', label: t('projects.noCustomer') },
@@ -82,7 +89,7 @@
 			name: name.trim(),
 			description: null,
 			status: 'active',
-			hourly_rate: null,
+			hourly_rate: ratesHidden ? null : parseRate(rate),
 			starts_on: startDate || null,
 			ends_on: endDate || null
 		});
@@ -90,6 +97,7 @@
 		customerId = '';
 		startDate = '';
 		endDate = '';
+		rate = '';
 		showAddProjectForm = false;
 		saving = false;
 		await loadData();
@@ -101,6 +109,7 @@
 		editingCustomerId = project.customer_id ? String(project.customer_id) : '';
 		editingStartDate = project.starts_on ?? '';
 		editingEndDate = project.ends_on ?? '';
+		editingRate = project.hourly_rate == null ? '' : String(project.hourly_rate).replace('.', ',');
 	}
 
 	function cancelEdit() {
@@ -112,13 +121,15 @@
 	}
 
 	async function saveEdit() {
-		if (!editingProjectId || !editingName.trim()) return;
+		const project = projects.find((p) => p.id === editingProjectId);
+		if (!project || !editingName.trim()) return;
 		saving = true;
-		await updateProject(editingProjectId, {
+		await updateProject(project.id, {
 			name: editingName.trim(),
 			customer_id: editingCustomerId ? Number(editingCustomerId) : null,
 			starts_on: editingStartDate || null,
-			ends_on: editingEndDate || null
+			ends_on: editingEndDate || null,
+			...hourlyRatePatch(project, parseRate(editingRate))
 		});
 		cancelEdit();
 		saving = false;
@@ -148,6 +159,9 @@
 			<Select bind:value={customerId} label={t('projects.customer')} options={customerOptions} placeholder={t('projects.customerPlaceholder')} />
 			<DateInput bind:value={startDate} label={t('projects.startDate')} />
 			<DateInput bind:value={endDate} label={t('projects.endDate')} />
+			{#if !ratesHidden}
+				<TextInput bind:value={rate} label="Stundensatz (€, netto)" placeholder="85,00" />
+			{/if}
 		</div>
 		<div class="flex justify-end">
 			<button
@@ -163,14 +177,15 @@
 
 	<div class="table-card">
 		<div class="table-scroll">
-		<div class="min-w-[640px]">
+		<div class="min-w-[760px]">
 		<div
 			class="grid border-b border-zinc-200 bg-zinc-100 text-xs font-semibold uppercase tracking-wide text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-			style="grid-template-columns: 1.2fr 1fr 1fr 0.8fr"
+			style="grid-template-columns: 1.2fr 1fr 1fr 0.7fr 0.8fr"
 		>
 			<div class="px-4 py-3">{t('common.name')}</div>
 			<div class="px-4 py-3">{t('projects.customer')}</div>
 			<div class="px-4 py-3">{t('projects.timeframe')}</div>
+			<div class="px-4 py-3 text-right">Stundensatz</div>
 			<div class="px-4 py-3 text-right">{t('common.action')}</div>
 		</div>
 
@@ -183,7 +198,7 @@
 				{#each projects as project (project.id)}
 					<div
 						class="grid items-center border-b border-zinc-100 text-sm text-zinc-700 last:border-0 dark:border-zinc-700/70 dark:text-zinc-200"
-					style="grid-template-columns: 1.2fr 1fr 1fr 0.8fr; min-height: 44px"
+					style="grid-template-columns: 1.2fr 1fr 1fr 0.7fr 0.8fr; min-height: 44px"
 				>
 						{#if editingProjectId === project.id}
 							<div class="px-4 py-2">
@@ -200,6 +215,13 @@
 								<input type="date" bind:value={editingStartDate} class="rounded border border-zinc-300 px-2 py-1 dark:border-zinc-600 dark:bg-zinc-900" />
 								<input type="date" bind:value={editingEndDate} class="rounded border border-zinc-300 px-2 py-1 dark:border-zinc-600 dark:bg-zinc-900" />
 							</div>
+							<div class="px-4 py-2">
+								{#if project.hourly_rate_hidden}
+									<div class="text-right text-zinc-400" title="Stundensätze sind nur mit Berechtigung für Rechnungen oder Berichte sichtbar">verborgen</div>
+								{:else}
+									<input bind:value={editingRate} inputmode="decimal" placeholder="€/h" aria-label="Stundensatz" class="w-full rounded border border-zinc-300 px-2 py-1 text-right dark:border-zinc-600 dark:bg-zinc-900" />
+								{/if}
+							</div>
 							<div class="flex items-center justify-end gap-2 px-4 py-2 text-xs">
 								<button type="button" onclick={saveEdit} class="rounded bg-blue-600 px-2 py-1 text-white" disabled={saving || !editingName.trim()}>{t('common.save')}</button>
 								<button type="button" onclick={cancelEdit} class="rounded border border-zinc-300 px-2 py-1 dark:border-zinc-600">{t('common.cancel')}</button>
@@ -208,6 +230,7 @@
 							<div class="truncate px-4 py-2">{project.name}</div>
 							<div class="truncate px-4 py-2">{project.customerName}</div>
 							<div class="truncate px-4 py-2">{formatTimeframe(project)}</div>
+							<div class="truncate px-4 py-2 text-right {project.hourly_rate_hidden ? 'text-zinc-400' : ''}">{formatRate(project)}</div>
 							<div class="px-4 py-2 text-right">
 								<button type="button" onclick={() => startEdit(project)} class="rounded-md border border-zinc-300 px-2 py-1 text-xs font-medium dark:border-zinc-600">{t('common.edit')}</button>
 							</div>
