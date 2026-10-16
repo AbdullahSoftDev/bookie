@@ -1,0 +1,311 @@
+// Contract test against a live bookie-server from the sibling checkout
+// (../bookie-server); skipped when it is not there.
+import { afterAll, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { createTestDb } from "./db/harness";
+import { __setDbForTesting } from "$lib/db/connection";
+import { getActionItems, getDashboardData } from "$lib/db/dashboard";
+import { getEuerData, getEuerReport, getUstvaData } from "$lib/db/tax-reports";
+import { getDatevBookingRows } from "$lib/db/datev";
+import * as inc from "$lib/db/incoming-invoices";
+import * as rec from "$lib/db/recurring";
+import {
+  createInvoice,
+  listInvoices,
+  syncInvoiceItems,
+} from "$lib/db/invoices";
+
+const savedStorage = (globalThis as any).localStorage;
+afterAll(() => ((globalThis as any).localStorage = savedStorage));
+
+const SERVER = `${import.meta.dir}/../../bookie-server`;
+const has = existsSync(`${SERVER}/index.ts`);
+Bun.env.AUTH_ENC_KEY ??= randomBytes(32).toString("base64");
+const load = (p: string) => (has ? import(`${SERVER}/${p}`) : ({} as any));
+const { startServer } = await load("index.ts");
+const { testDb } = await load("test/helpers.ts");
+const { createSession, hashPassword } = await load("src/auth.ts");
+const { runDue } = await load("src/api/recurring.ts");
+
+test.skipIf(!has)(
+  "cloud reports equal local reports for the same data",
+  async () => {
+    const sdb = await testDb();
+    const server = startServer(sdb, 0);
+    const ldb = createTestDb();
+    __setDbForTesting(ldb);
+    let session: string | null = null;
+    (globalThis as any).localStorage = {
+      getItem: () => session,
+      removeItem() {},
+    };
+
+    const [u] =
+      await sdb.sql`INSERT INTO users (email, name, password_hash) VALUES ('p@x.de', 'U', ${await hashPassword("x")}) RETURNING id`;
+    await sdb.sql`INSERT INTO companies (id, name, subscription_status) VALUES (1, 'C', 'active')`;
+    await sdb.sql`INSERT INTO company_members (company_id, user_id, role) VALUES (1, ${u.id}, 'admin')`;
+    await ldb.execute(
+      "INSERT INTO companies (id, name, country_code) VALUES (1, 'C', 'DE')",
+    );
+    const both = async (table: string, row: Record<string, unknown>) => {
+      const k = Object.keys(row);
+      await ldb.execute(
+        `INSERT INTO ${table} (${k.join(",")}) VALUES (${k.map((_, i) => `$${i + 1}`).join(",")})`,
+        Object.values(row),
+      );
+      await sdb.sql`INSERT INTO ${sdb.sql(table)} ${sdb.sql(row)}`;
+    };
+    await both("customers", {
+      id: 1,
+      company_id: 1,
+      name: "Kunde",
+      type: "kunde",
+    });
+    await both("customers", {
+      id: 2,
+      company_id: 1,
+      name: "Lieferant",
+      type: "lieferant",
+    });
+    const y = new Date().getFullYear();
+    let iid = 0,
+      itid = 0;
+    const inv = async (
+      status: string,
+      issue: string,
+      items: [number, number][],
+      o: Record<string, unknown> = {},
+    ) => {
+      const net = items.reduce((a, [x]) => a + x, 0),
+        tax = Math.round(items.reduce((a, [x, r]) => a + (x * r) / 100, 0));
+      const id = ++iid;
+      await both("invoices", {
+        id,
+        company_id: 1,
+        customer_id: 1,
+        invoice_number: `RE${id}`,
+        status,
+        issue_date: issue,
+        net_cents: net,
+        tax_cents: tax,
+        gross_cents: net + tax,
+        recipient_name: "Kunde",
+        ...o,
+      });
+      for (const [x, r] of items)
+        await both("invoice_items", {
+          id: ++itid,
+          invoice_id: id,
+          description: "x",
+          quantity: 1,
+          unit_price_net_cents: x,
+          tax_rate: r,
+          line_total_net_cents: x,
+        });
+    };
+    await inv(
+      "sent",
+      `${y}-01-15`,
+      [
+        [10000, 19],
+        [5000, 7],
+      ],
+      { due_date: `${y}-02-01` },
+    );
+    await inv("paid", `${y}-02-10`, [[20000, 19]], { paid_date: `${y}-02-12` });
+    await inv("paid", `${y - 1}-12-20`, [[3333, 19]], {
+      paid_date: `${y}-01-03`,
+    });
+    await inv("sent", `${y}-03-05`, [[-20000, 19]]);
+    await inv("void", `${y}-01-20`, [[100000, 19]]);
+    await inv("draft", `${y}-01-25`, [[30000, 0]]);
+    await inv("paid", `${y}-04-01`, [[8000, 0]], { paid_date: `${y}-05-01` });
+    await both("incoming_invoices", {
+      id: 1,
+      company_id: 1,
+      supplier_id: 2,
+      invoice_number: "L-1",
+      invoice_date: `${y}-01-10`,
+      status: "offen",
+      net_cents: 10000,
+      tax_cents: 1900,
+      gross_cents: 11900,
+    });
+    await both("incoming_invoices", {
+      id: 2,
+      company_id: 1,
+      supplier_id: 2,
+      invoice_date: `${y}-04-02`,
+      paid_date: `${y}-04-20`,
+      status: "bezahlt",
+      net_cents: 5000,
+      tax_cents: 350,
+      gross_cents: 5350,
+    });
+
+    const all = async () => ({
+      ...(await getDashboardData(1, y, "month")),
+      q: await getDashboardData(1, y, "quarter"),
+      actions: await getActionItems(1),
+      ustva: await getUstvaData(1, y, "quarter"),
+      euer: await getEuerData(1, y, "month"),
+      euerReport: await getEuerReport(1, `${y}-01-01`, `${y}-06-30`),
+      datev: await getDatevBookingRows(1, y),
+    });
+    try {
+      const local = await all();
+      session = JSON.stringify({
+        url: server.url.origin,
+        token: await createSession(sdb, Number(u.id)),
+        email: "e",
+      });
+      const remote = await all();
+      expect(remote).toEqual(local);
+      expect(local.euer.length).toBeGreaterThan(0);
+      expect(local.actions.overdue.count).toBe(1);
+    } finally {
+      __setDbForTesting(null);
+      server.stop(true);
+    }
+  },
+);
+
+test.skipIf(!has)(
+  "desktop cloud incoming + recurring against a live server",
+  async () => {
+    const db = await testDb();
+    const server = startServer(db, 0);
+    const [u] =
+      await db.sql`INSERT INTO users (email, name, password_hash) VALUES ('e2e@x.de', 'U', ${await hashPassword("x")}) RETURNING id`;
+    const [c] =
+      await db.sql`INSERT INTO companies (name, subscription_status) VALUES ('C', 'active') RETURNING id`;
+    await db.sql`INSERT INTO company_members (company_id, user_id, role) VALUES (${c.id}, ${u.id}, 'admin')`;
+    const [s] =
+      await db.sql`INSERT INTO customers (company_id, name, type) VALUES (${c.id}, 'Miete GmbH', 'lieferant') RETURNING id`;
+    const token = await createSession(db, Number(u.id));
+    (globalThis as any).localStorage = {
+      getItem: () =>
+        JSON.stringify({ url: server.url.origin, token, email: "e" }),
+      removeItem() {},
+    };
+    try {
+      const row = {
+        company_id: 0,
+        supplier_id: Number(s.id),
+        invoice_number: "M-1",
+        invoice_date: "2026-01-31",
+        net_cents: 1000,
+        tax_cents: 190,
+        status: "offen",
+        file_name: null,
+        file_type: null,
+        s3_key: null,
+        local_path: null,
+        notes: "Miete",
+      };
+      const id = await inc.createIncomingInvoice(row);
+      await inc.createIncomingInvoice({
+        ...row,
+        invoice_date: "2026-02-01",
+        status: "bezahlt",
+      });
+      const page: inc.PageResult<inc.IncomingInvoiceWithSupplier> =
+        await inc.listIncomingInvoices(0, { limit: 1, offset: 0 });
+      expect(page.totalCount).toBe(2);
+      expect(page.rows[0]).toMatchObject({
+        invoice_date: "2026-02-01",
+        paid_date: "2026-02-01",
+        gross_cents: 1190,
+        supplier_name: "Miete GmbH",
+      });
+      await inc.updateIncomingInvoice(id, { tax_cents: 0 });
+      await expect(
+        inc.updateIncomingInvoicePaidDate(id, "2026-02-05"),
+      ).rejects.toThrow("nur bei bezahlten");
+      await inc.updateIncomingInvoiceStatus(id, "bezahlt");
+      await inc.updateIncomingInvoicePaidDate(id, "2026-02-05");
+      expect(await inc.getIncomingInvoiceById(id)).toMatchObject({
+        gross_cents: 1000,
+        status: "bezahlt",
+        paid_date: "2026-02-05",
+      });
+
+      const snap = await rec.snapshotIncoming(id);
+      await rec.createRecurring({
+        company_id: 0,
+        kind: "incoming",
+        label: snap.label,
+        frequency: "monthly",
+        interval_count: 1,
+        next_run_date: "2026-02-28",
+        end_date: null,
+        payload: snap.payload,
+      });
+      expect(await runDue(db, "2026-03-30")).toBe(2);
+      const all = await inc.listIncomingInvoices(0);
+      expect(all.rows.map((r) => r.invoice_date)).toEqual([
+        "2026-03-28",
+        "2026-02-28",
+        "2026-02-01",
+        "2026-01-31",
+      ]);
+      expect(all.rows[0]).toMatchObject({
+        status: "offen",
+        net_cents: 1000,
+        supplier_id: Number(s.id),
+      });
+
+      const [k] =
+        await db.sql`INSERT INTO customers (company_id, name, type) VALUES (${c.id}, 'Kunde', 'kunde') RETURNING id`;
+      const invId = await createInvoice({
+        company_id: 0,
+        customer_id: Number(k.id),
+        project_id: null,
+        invoice_number: "",
+        status: "draft",
+        issue_date: "2026-01-15",
+        due_date: "2026-01-29",
+        currency: "EUR",
+        recipient_name: "Kunde",
+        language: "de",
+        legal_country_code: "DE",
+        delivery_date: "2026-01-15",
+        due_surcharge: 0,
+      } as any);
+      await syncInvoiceItems(invId, [
+        {
+          description: "Wartung",
+          quantity: 1,
+          unit: "Std",
+          unit_price_net_cents: 5000,
+          tax_rate: 19,
+        } as any,
+      ]);
+      const isnap = await rec.snapshotInvoice(invId);
+      await rec.createRecurring({
+        company_id: 0,
+        kind: "invoice",
+        label: isnap.label,
+        frequency: "monthly",
+        interval_count: 1,
+        next_run_date: "2026-02-15",
+        end_date: null,
+        payload: isnap.payload,
+      });
+      expect(await runDue(db, "2026-02-20")).toBe(1);
+      const invs = (await listInvoices(0)).rows;
+      expect(invs.length).toBe(2);
+      expect(invs.find((i) => i.issue_date === "2026-02-15")).toMatchObject({
+        status: "draft",
+        net_cents: 5000,
+        customer_id: Number(k.id),
+      });
+
+      await inc.deleteIncomingInvoice(id);
+      expect(await inc.getIncomingInvoiceById(id)).toBeUndefined();
+    } finally {
+      server.stop(true);
+    }
+  },
+);

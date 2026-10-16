@@ -1,3 +1,4 @@
+import { api, cloud } from "$lib/cloud";
 import { getDb } from "./connection";
 import { createInvoice, getInvoiceById } from "./invoices";
 import { createInvoiceItem, listByInvoice } from "./invoice-items";
@@ -33,6 +34,11 @@ export type NewRecurring = {
 };
 
 export async function createRecurring(data: NewRecurring): Promise<number> {
+  if (cloud()) {
+    // The server scopes to the active company and validates the payload against it.
+    const { company_id: _, ...body } = data;
+    return (await api<{ id: number }>("/api/recurring", "POST", body)).id;
+  }
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO recurring_entries
@@ -188,6 +194,7 @@ export async function runDueRecurring(
   companyId: number,
   today: string,
 ): Promise<number> {
+  if (cloud()) return 0; // bookie-server materialises due entries hourly
   const db = await getDb();
   const due = await db.select<RecurringEntry[]>(
     `SELECT * FROM recurring_entries
