@@ -322,8 +322,11 @@ export function renderInvoiceXml(
       )
     : "";
 
-  const buyerRefXml = data.buyerReference
-    ? `${NL}\t\t\t<ram:BuyerReference>${escapeXml(data.buyerReference)}</ram:BuyerReference>`
+  // XRechnung requires BT-10 (BR-DE-15); B2B buyers without a Leitweg-ID get the usual "n/a".
+  const buyerRef =
+    data.buyerReference || (format === "xrechnung" ? "n/a" : "");
+  const buyerRefXml = buyerRef
+    ? `${NL}\t\t\t<ram:BuyerReference>${escapeXml(buyerRef)}</ram:BuyerReference>`
     : "";
 
   const periodXml =

@@ -189,6 +189,14 @@ describe("renderInvoiceXml", () => {
     expect(x).not.toContain("urn:cen.eu:en16931:2017</ram:ID>");
   });
 
+  test("missing buyer reference falls back to n/a for XRechnung only", () => {
+    const d = { ...FIXTURE, buyerReference: undefined };
+    expect(renderInvoiceXml(d, "xrechnung")).toContain(
+      "<ram:BuyerReference>n/a</ram:BuyerReference>",
+    );
+    expect(renderInvoiceXml(d, "zugferd")).not.toContain("BuyerReference");
+  });
+
   test("ExchangedDocument carries invoice number, type 380 and date 102", () => {
     const xml = renderInvoiceXml(FIXTURE, "zugferd");
     expect(xml).toContain("<ram:ID>RE-2026-0001</ram:ID>");

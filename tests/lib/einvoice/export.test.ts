@@ -177,7 +177,6 @@ describe("validateInvoiceXmlData", () => {
     d.seller.phone = undefined;
     expect(fields(validateInvoiceXmlData(d, "zugferd"))).toEqual([]);
     expect(fields(validateInvoiceXmlData(d, "xrechnung"))).toEqual([
-      "buyerReference",
       "seller.phone",
       "buyer.email",
     ]);

@@ -561,6 +561,7 @@ export default {
     grossTotal: "Gesamtbetrag",
     notes: "Bemerkungen",
     bankDetails: "Bankverbindung",
+    scanToPay: "Mit Banking-App scannen und bezahlen",
     accountHolder: "Inh.",
     bank: "Bank",
     vatId: "USt-IdNr.",

@@ -11,6 +11,7 @@
 import { translationsFor, type Locale } from '$lib/i18n';
 import { getLegalProfile, type LegalCountry } from '$lib/legal';
 import { formatCents } from '$lib/shared/money';
+import { epcPayload, epcSvg } from './epc-qr';
 
 export interface InvoicePdfData {
 	issuerName: string;
@@ -181,6 +182,11 @@ export function generateInvoiceHtml(data: InvoicePdfData): string {
 		.map((p) => (p === '' ? '<br/>' : `<div>${esc(p)}</div>`))
 		.join('');
 
+	const epc = epcPayload(data, `${tr.invoiceTitle} ${data.invoiceNumber}`);
+	const epcHtml = epc
+		? `<div class="bank-qr">${epcSvg(epc, 25)}<div>${esc(tr.scanToPay)}</div></div>`
+		: '';
+
 	const htmlLang = locale === 'de' ? 'de' : 'en';
 
 	return `<!DOCTYPE html>
@@ -239,6 +245,9 @@ th.qty, th.price, th.tax, th.total { text-align: right; }
 .bank-info { margin-top: 6mm; padding: 3mm 4mm; background: #fafafa; border: 0.5px solid #e8e8e8; border-radius: 3px; font-size: 8.5px; color: #555; line-height: 1.6; }
 .bank-info-label { font-size: 7px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #888; margin-bottom: 2px; }
 .bank-info-row { display: flex; gap: 12px; }
+.bank-info:has(.bank-qr) { display: flex; justify-content: space-between; align-items: flex-end; }
+.bank-qr { text-align: center; font-size: 7px; color: #888; }
+.bank-qr svg { display: block; }
 .bank-info-row span:first-child { color: #888; min-width: 35px; }
 .footer { position: absolute; bottom: 15mm; left: 25mm; right: 25mm; border-top: 0.5px solid #ccc; padding-top: 3mm; display: flex; justify-content: space-between; font-size: 7px; color: #888; line-height: 1.6; }
 .footer-col { flex: 1; }
@@ -321,11 +330,14 @@ th.qty, th.price, th.tax, th.total { text-align: right; }
 
 	${data.issuerBankIban ? `
 	<div class="bank-info">
+		<div>
 		<div class="bank-info-label">${esc(tr.bankDetails)}</div>
 		${data.issuerBankAccountHolder ? `<div class="bank-info-row"><span>${esc(tr.accountHolder)}</span><span>${esc(data.issuerBankAccountHolder)}</span></div>` : ''}
 		${data.issuerBankName ? `<div class="bank-info-row"><span>${esc(tr.bank)}</span><span>${esc(data.issuerBankName)}</span></div>` : ''}
 		<div class="bank-info-row"><span>IBAN</span><span>${esc(data.issuerBankIban)}</span></div>
 		${data.issuerBankBic ? `<div class="bank-info-row"><span>BIC</span><span>${esc(data.issuerBankBic)}</span></div>` : ''}
+		</div>
+		${epcHtml}
 	</div>
 	` : ''}
 

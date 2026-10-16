@@ -10,6 +10,7 @@ import { fmtDate, fmtNumber, type InvoicePdfData } from './invoice-pdf';
 import { translationsFor } from '$lib/i18n';
 import { getLegalProfile } from '$lib/legal';
 import { formatCents } from '$lib/shared/money';
+import { epcMatrix, epcPayload } from './epc-qr';
 
 // -- A4 dimensions & margins (mm) --
 const PW = 210;
@@ -289,7 +290,9 @@ export async function createInvoicePdf(data: InvoicePdfData, opts: CreateInvoice
 
 	// Bank info
 	if (data.issuerBankIban) {
-		const bankH = 14;
+		const epc = epcPayload(data, `${tr.invoiceTitle} ${data.invoiceNumber}`);
+		const qrSize = 22;
+		const bankH = epc ? qrSize + 6 : 14;
 		drawRect(page, ML, y, CW, bankH, C.bgLight);
 		drawLine(page, ML, y, ML + CW, C.borderLight, 0.35);
 		drawLine(page, ML, y + bankH, ML + CW, C.borderLight, 0.35);
@@ -308,6 +311,24 @@ export async function createInvoicePdf(data: InvoicePdfData, opts: CreateInvoice
 			drawText(page, label, ML + 4, by, font, 6.4, C.light);
 			drawText(page, value, ML + 18, by, font, 6.4, C.gray);
 			by += 2.8;
+		}
+
+		if (epc) {
+			const m = epcMatrix(epc);
+			const mod = qrSize / m.length;
+			const qx = ML + CW - 4 - qrSize;
+			const qy = y + 3;
+			drawRect(page, qx - 1.5, qy - 1.5, qrSize + 3, qrSize + 3, rgb(1, 1, 1));
+			// one rect per horizontal run of dark modules keeps the PDF small
+			m.forEach((row, r) => {
+				for (let c = 0; c < row.length; c++) {
+					if (!row[c]) continue;
+					const start = c;
+					while (row[c + 1]) c++;
+					drawRect(page, qx + start * mod, qy + r * mod, (c - start + 1) * mod, mod, rgb(0, 0, 0));
+				}
+			});
+			drawTextRight(page, tr.scanToPay, qx - 3, y + bankH - 3, font, 5.25, C.light);
 		}
 	}
 
