@@ -558,6 +558,7 @@ export default {
     grossTotal: "Total amount",
     notes: "Notes",
     bankDetails: "Bank details",
+    scanToPay: "Scan with your banking app to pay",
     accountHolder: "Holder",
     bank: "Bank",
     vatId: "VAT ID",
