@@ -158,7 +158,6 @@
 									aria-label={t('invoices.paidDate')}
 									title={t('invoices.paidDate')}
 									value={invoice.paid_date ?? ''}
-									disabled={!!cloud()}
 									onclick={(e) => e.stopPropagation()}
 									onchange={(e) => changePaidDate(e, invoice)}
 									class="mt-1 block rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"

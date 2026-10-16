@@ -13,8 +13,12 @@ import { buildImport, pushImport } from "$lib/cloud-import";
 import * as rec from "$lib/db/recurring";
 import {
   createInvoice,
+  getInvoiceById,
+  issueInvoice,
   listInvoices,
   syncInvoiceItems,
+  updateInvoicePaidDate,
+  updateInvoiceStatus,
 } from "$lib/db/invoices";
 
 const savedStorage = (globalThis as any).localStorage;
@@ -301,6 +305,18 @@ test.skipIf(!has)(
         status: "draft",
         net_cents: 5000,
         customer_id: Number(k.id),
+      });
+
+      // Zufluss date correction on a paid invoice
+      await expect(updateInvoicePaidDate(invId, "2026-01-20")).rejects.toThrow(
+        "nur bei bezahlten",
+      );
+      await issueInvoice(invId);
+      await updateInvoiceStatus(invId, "sent", "paid");
+      await updateInvoicePaidDate(invId, "2026-01-20");
+      expect(await getInvoiceById(invId)).toMatchObject({
+        status: "paid",
+        paid_date: "2026-01-20",
       });
 
       await inc.deleteIncomingInvoice(id);
