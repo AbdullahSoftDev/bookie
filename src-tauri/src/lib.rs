@@ -604,8 +604,6 @@ async fn boot_check(app: AppHandle) -> Result<BootStatus, BookieError> {
 
         // The probes use `db_path(&app)` (app_config_dir, the same file
         // `tauri-plugin-sql` opens at boot), not `app_data_dir`.
-        // ponytail: schema + S3 probes still open two read-only connections;
-        // share one if boot latency ever shows up in a profile.
         let (schema, s3_config) = match db_path(&app) {
             Ok(db_file) => (
                 probe_schema(&db_file, EXPECTED_SCHEMA_VERSION),
@@ -1539,8 +1537,6 @@ async fn write_binary_file(request: tauri::ipc::Request<'_>) -> Result<(), Booki
         });
     };
 
-    // ponytail: one memcpy of the body so the disk write can leave the IPC
-    // thread; Request only lends the bytes.
     let data = data.clone();
     info!("Writing file: {path}");
     run_blocking(move || {

@@ -112,8 +112,7 @@
 		}
 		// Materialise any recurring invoices/costs that have come due since the
 		// app was last opened. Best-effort: a failure here must never block the
-		// shell. ponytail: runs on boot only (no in-app scheduler) — desktop app
-		// is opened often enough that catch-up on launch covers the use case.
+		// shell.
 		try {
 			const companies = await listCompanies();
 			const today = new Date().toISOString().slice(0, 10);

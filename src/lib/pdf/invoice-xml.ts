@@ -37,7 +37,7 @@ export type XmlInvoiceFormat = "zugferd" | "xrechnung";
 /** UNTDID 5305 VAT category codes Bookie can emit. */
 export type TaxCategory = "S" | "Z" | "E" | "AE" | "K" | "G" | "O";
 
-/** BT-120 default for 0 % lines. ponytail: reverse charge / intra-EU supply (AE/K) need explicit data. */
+/** BT-120 default for 0 % lines. */
 export const DEFAULT_EXEMPTION_REASON = "Umsatzsteuerfrei";
 
 /** Category for a rate when the caller does not set one. */

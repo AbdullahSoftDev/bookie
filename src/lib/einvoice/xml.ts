@@ -4,7 +4,7 @@
  * Why not DOMParser: it does not exist under `bun test` (and we add no
  * dependency). UBL and CII element local names are unambiguous inside the
  * paths we read, so prefixes are dropped and nodes are addressed by local-name
- * paths. ponytail: not a validating parser; no namespace URI check, no DTD.
+ * paths.
  * DOCTYPE with ENTITY declarations is rejected (XXE / billion-laughs).
  */
 

@@ -10,7 +10,7 @@
 		getS3Settings,
 		listVatTaxes
 	} from '$lib/db/settings';
-	import { uploadInvoicePdf, presignDownloadUrl } from '$lib/s3/client';
+	import { uploadFile, uploadInvoicePdf, presignDownloadUrl } from '$lib/s3/client';
 	import type { Company, Customer, VatTax } from '$lib/db/types';
 	import { generateInvoiceHtml, type InvoicePdfData } from '$lib/pdf/invoice-pdf';
 	import { generateInvoiceNumber as formatInvoiceNumber } from '$lib/invoice-number';
@@ -420,7 +420,7 @@
 			if (s3Config.enabled) {
 				const data = buildPdfData();
 				const eInvoice = prepareEInvoice(data);
-				// ponytail: XRechnung is XML-only, so S3 keeps the visual PDF for it.
+				// XRechnung is XML-only: S3 gets the XML (the legal original) next to the visual PDF.
 				const pdfBytes =
 					eInvoice?.format === 'zugferd'
 						? (await (await import('$lib/einvoice/export')).createEInvoice(data, eInvoice.xml, 'zugferd')).bytes
@@ -429,6 +429,11 @@
 				const key = await uploadInvoicePdf(s3Config, safeNumber, pdfBytes);
 				s3Key = key;
 				onS3KeyUpdate?.(key);
+				if (eInvoice?.format === 'xrechnung') {
+					// after the PDF, so an XML validation error does not cost the PDF upload
+					const xml = await (await import('$lib/einvoice/export')).createEInvoice(data, eInvoice.xml, 'xrechnung');
+					await uploadFile(s3Config, s3Config.path_prefix, `${safeNumber}.xml`, xml.bytes, 'application/xml');
+				}
 			}
 		} catch (err) {
 			pdfError = `${t('invoiceForm.s3UploadFailed')}: ${err instanceof Error ? err.message : err}`;

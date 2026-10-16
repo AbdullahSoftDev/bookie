@@ -125,8 +125,9 @@
 
 	function resetForm() {
 		description = '';
-		// ponytail: single active project assumed; first match wins
-		const activeProject = projects.find((project) => project.status === 'active');
+		// Prefill the project of the newest listed entry if still active, else the first active one.
+		const active = projects.filter((project) => project.status === 'active');
+		const activeProject = active.find((project) => project.id === rows[0]?.project_id) ?? active[0];
 		projectId = activeProject ? String(activeProject.id) : '';
 		customerId = activeProject?.customer_id ? String(activeProject.customer_id) : '';
 		entryDate = todayIsoDate();

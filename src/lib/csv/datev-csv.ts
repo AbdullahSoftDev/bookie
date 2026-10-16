@@ -33,11 +33,6 @@ export interface DatevExportOptions {
   generatedAt: Date;
 }
 
-// ponytail: fixed default accounts per SKR — revenue uses the Automatik-
-// konten (VAT auto-derived, so no BU key), expenses book to the generic
-// "Sonstige betriebliche Aufwendungen" with an explicit input-tax BU key.
-// The Steuerberater can remap accounts during import; per-category expense
-// accounts would need expense categories Bookie doesn't have.
 const ACCOUNTS: Record<
   "03" | "04",
   {
