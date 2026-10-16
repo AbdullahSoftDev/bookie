@@ -135,7 +135,8 @@
 			const text =
 				`Einmalig in die Cloud-Firma „${target.name}“ übertragen:\n` +
 				`${c.customers} Kunden, ${c.projects} Projekte, ${c.time_entries} Zeiteinträge, ` +
-				`${c.invoices} Rechnungen, ${c.vat_taxes} MwSt-Sätze, Firmenstammdaten und die Rechnungseinstellungen.\n\n` +
+				`${c.invoices} Rechnungen, ${c.incoming_invoices} Eingangsrechnungen, ${c.recurring_entries} wiederkehrende Buchungen, ` +
+				`${c.vat_taxes} MwSt-Sätze, Firmenstammdaten und die Rechnungseinstellungen.\n\n` +
 				'Nur in eine leere Cloud-Firma möglich und nicht wiederholbar. Ausgestellte Rechnungen ' +
 				'behalten Nummer und Beträge; Zeiteinträge werden dir zugeordnet und sind nicht freigegeben. ' +
 				'Die lokale Datei bleibt unverändert.\n\n' +
@@ -144,7 +145,7 @@
 			try {
 				const r = await pushImport(doc);
 				await pushOrganization();
-				notice = `Übertragen: ${r.customers} Kunden, ${r.projects} Projekte, ${r.time_entries} Zeiteinträge, ${r.invoices} Rechnungen.`;
+				notice = `Übertragen: ${r.customers} Kunden, ${r.projects} Projekte, ${r.time_entries} Zeiteinträge, ${r.invoices} Rechnungen, ${r.incoming_invoices} Eingangsrechnungen, ${r.recurring_entries} wiederkehrende Buchungen.`;
 			} catch (e) {
 				if (!(e instanceof CloudError && e.code === 'company_not_empty')) throw e;
 				error = message(e);

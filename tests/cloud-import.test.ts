@@ -21,28 +21,90 @@ test("buildImport: first company only, cents mapping, items/payments/history nes
     INSERT INTO invoices (id, company_id, customer_id, invoice_number, status, issue_date, currency, net_cents, tax_cents, gross_cents, references_invoice_id, cancellation_reason, language, legal_country_code)
       VALUES (41, 2, 10, 'RE-2026-0001-storno-1', 'sent', '2026-04-01', 'EUR', -13575, -2579, -16154, 40, 'Fehler', 'de', 'DE');
     INSERT INTO vat_taxes (name, description, goods_value_percent) VALUES ('USt 19', '', 19);
+    INSERT INTO incoming_invoices (id, company_id, supplier_id, invoice_date, status, net_cents, tax_cents, gross_cents, local_path)
+      VALUES (50, 2, 10, '2026-02-01', 'offen', 100, 19, 119, '/x.pdf'), (51, 1, 11, '2026-02-01', 'offen', 1, 0, 1, NULL);
+    INSERT INTO recurring_entries (id, company_id, kind, label, frequency, interval_count, next_run_date, payload)
+      VALUES (60, 2, 'incoming', 'Miete', 'monthly', 1, '2026-11-01', '{"supplier_id":10}');
     INSERT OR REPLACE INTO settings_invoice (id, currency, decimal_places, days_till_due, due_surcharge, notes, invoice_number_format, invoice_number_incrementor)
       VALUES (1, 'EUR', 2, 14, 0, '', 'RE-{YYYY}-{COUNT}', 13);
   `);
 
   const doc = await buildImport(db);
-  expect(countsOf(doc)).toEqual({ vat_taxes: 1, customers: 1, projects: 2, time_entries: 1, invoices: 2 });
+  expect(countsOf(doc)).toEqual({
+    vat_taxes: 1,
+    customers: 1,
+    projects: 2,
+    time_entries: 1,
+    invoices: 2,
+    incoming_invoices: 1,
+    recurring_entries: 1,
+  });
+  expect(doc.incoming_invoices[0]).toMatchObject({
+    id: 50,
+    supplier_id: 10,
+    gross_cents: 119,
+  });
+  expect(doc.recurring_entries[0]).toMatchObject({
+    kind: "incoming",
+    payload: '{"supplier_id":10}',
+  });
   expect(doc.customers[0]).toMatchObject({ id: 10, name: "Kunde" }); // company 'Alpha' sorts first
   expect(doc.projects.map((p) => p.hourly_rate_cents)).toEqual([9050, null]);
   expect(doc.projects[0]).not.toHaveProperty("hourly_rate");
-  expect(doc.time_entries[0]).toMatchObject({ id: 30, project_id: 20, customer_id: 10, duration_minutes: 90 });
-  expect(doc.settings).toMatchObject({ invoice_number_incrementor: 13, invoice_number_format: "RE-{YYYY}-{COUNT}" });
+  expect(doc.time_entries[0]).toMatchObject({
+    id: 30,
+    project_id: 20,
+    customer_id: 10,
+    duration_minutes: 90,
+  });
+  expect(doc.settings).toMatchObject({
+    invoice_number_incrementor: 13,
+    invoice_number_format: "RE-{YYYY}-{COUNT}",
+  });
 
   const [inv, storno] = doc.invoices as any[];
-  expect(inv).toMatchObject({ id: 40, invoice_number: "RE-2026-0001", status: "sent", net_cents: 13575, gross_cents: 16154, issuer_name: "Alt GmbH" });
-  expect(inv.items).toEqual([expect.objectContaining({ project_id: 20, time_entry_id: 30, quantity: 1.5, unit_price_net_cents: 9050, line_total_net_cents: 13575 })]);
-  expect(inv.payments).toEqual([expect.objectContaining({ payment_date: "2026-04-10", amount_cents: 5000 })]);
-  expect(inv.status_history.map((h: any) => h.to_status)).toEqual(["draft", "sent"]);
-  expect(storno).toMatchObject({ id: 41, references_invoice_id: 40, items: [], payments: [] });
+  expect(inv).toMatchObject({
+    id: 40,
+    invoice_number: "RE-2026-0001",
+    status: "sent",
+    net_cents: 13575,
+    gross_cents: 16154,
+    issuer_name: "Alt GmbH",
+  });
+  expect(inv.items).toEqual([
+    expect.objectContaining({
+      project_id: 20,
+      time_entry_id: 30,
+      quantity: 1.5,
+      unit_price_net_cents: 9050,
+      line_total_net_cents: 13575,
+    }),
+  ]);
+  expect(inv.payments).toEqual([
+    expect.objectContaining({ payment_date: "2026-04-10", amount_cents: 5000 }),
+  ]);
+  expect(inv.status_history.map((h: any) => h.to_status)).toEqual([
+    "draft",
+    "sent",
+  ]);
+  expect(storno).toMatchObject({
+    id: 41,
+    references_invoice_id: 40,
+    items: [],
+    payments: [],
+  });
 });
 
 test("buildImport: empty local db gives empty lists", async () => {
   db = createTestDb();
   const doc = await buildImport(db);
-  expect(countsOf(doc)).toEqual({ vat_taxes: 0, customers: 0, projects: 0, time_entries: 0, invoices: 0 });
+  expect(countsOf(doc)).toEqual({
+    vat_taxes: 0,
+    customers: 0,
+    projects: 0,
+    time_entries: 0,
+    invoices: 0,
+    incoming_invoices: 0,
+    recurring_entries: 0,
+  });
 });

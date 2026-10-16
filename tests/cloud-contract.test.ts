@@ -9,6 +9,7 @@ import { getActionItems, getDashboardData } from "$lib/db/dashboard";
 import { getEuerData, getEuerReport, getUstvaData } from "$lib/db/tax-reports";
 import { getDatevBookingRows } from "$lib/db/datev";
 import * as inc from "$lib/db/incoming-invoices";
+import { buildImport, pushImport } from "$lib/cloud-import";
 import * as rec from "$lib/db/recurring";
 import {
   createInvoice,
@@ -305,6 +306,59 @@ test.skipIf(!has)(
       await inc.deleteIncomingInvoice(id);
       expect(await inc.getIncomingInvoiceById(id)).toBeUndefined();
     } finally {
+      server.stop(true);
+    }
+  },
+);
+
+test.skipIf(!has)(
+  "local incoming invoices and recurring entries import into an empty cloud company",
+  async () => {
+    const sdb = await testDb();
+    const server = startServer(sdb, 0);
+    const ldb = createTestDb();
+    ldb.raw.exec(`
+    INSERT INTO companies (id, name, country_code) VALUES (1, 'C', 'DE');
+    INSERT INTO customers (id, company_id, name, country_code, type) VALUES (10, 1, 'Vermieter', 'DE', 'lieferant');
+    INSERT INTO incoming_invoices (company_id, supplier_id, invoice_number, invoice_date, status, paid_date, net_cents, tax_cents, gross_cents, local_path)
+      VALUES (1, 10, 'M-1', '2026-01-01', 'bezahlt', '2026-01-05', 1000, 190, 1190, '/x.pdf');
+    INSERT INTO recurring_entries (company_id, kind, label, frequency, interval_count, next_run_date, payload)
+      VALUES (1, 'incoming', 'Miete', 'monthly', 1, '2026-02-01', '{"company_id":1,"supplier_id":10,"invoice_number":"M","net_cents":1000,"tax_cents":190,"status":"offen","file_name":null,"file_type":null,"s3_key":null,"local_path":null,"notes":null}');
+  `);
+    const [u] =
+      await sdb.sql`INSERT INTO users (email, name, password_hash) VALUES ('i@x.de', 'U', ${await hashPassword("x")}) RETURNING id`;
+    const [c] =
+      await sdb.sql`INSERT INTO companies (name, subscription_status) VALUES ('Cloud', 'active') RETURNING id`;
+    await sdb.sql`INSERT INTO company_members (company_id, user_id, role) VALUES (${c.id}, ${u.id}, 'admin')`;
+    const token = await createSession(sdb, Number(u.id));
+    (globalThis as any).localStorage = {
+      getItem: () =>
+        JSON.stringify({ url: server.url.origin, token, email: "e" }),
+      removeItem() {},
+    };
+    try {
+      expect(await pushImport(await buildImport(ldb))).toMatchObject({
+        customers: 1,
+        incoming_invoices: 1,
+        recurring_entries: 1,
+      });
+      const { rows } = await inc.listIncomingInvoices(0);
+      expect(rows).toEqual([
+        expect.objectContaining({
+          invoice_number: "M-1",
+          paid_date: "2026-01-05",
+          supplier_name: "Vermieter",
+          s3_key: null,
+        }),
+      ]);
+      expect(await runDue(sdb, "2026-02-01")).toBe(1);
+      expect((await inc.listIncomingInvoices(0)).rows[0]).toMatchObject({
+        invoice_date: "2026-02-01",
+        supplier_name: "Vermieter",
+        status: "offen",
+      });
+    } finally {
+      await ldb.close();
       server.stop(true);
     }
   },
