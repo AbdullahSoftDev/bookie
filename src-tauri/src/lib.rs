@@ -1371,7 +1371,7 @@ fn validate_restore_bytes(bytes: &[u8]) -> Result<(), String> {
     if bytes.is_empty() {
         return Err("The uploaded file is empty.".to_string());
     }
-    if bytes.len() < 16 || &bytes[..16] != SQLITE_MAGIC {
+    if !is_sqlite_backup(bytes) {
         return Err("The file is not a valid SQLite database.".to_string());
     }
     Ok(())
@@ -1758,9 +1758,8 @@ where
     }
 }
 
-/// Multiply `base_ms` by a uniform random factor in [0.5, 1.5] using a small
-/// inline PRNG seeded from the system clock. Avoids pulling in `rand` for a
-/// single use site.
+/// Multiply `base_ms` by a uniform random factor in [0.5, 1.5]. Randomness
+/// comes from std's `RandomState` (OS-seeded hasher keys), so no `rand` dep.
 fn jitter_full(base_ms: u64) -> u64 {
     if base_ms == 0 {
         return 0;
@@ -1769,42 +1768,14 @@ fn jitter_full(base_ms: u64) -> u64 {
     let half = base_ms / 2;
     // full span = base_ms; result in [half, half + base_ms] = [0.5x, 1.5x]
     let modulus = base_ms.saturating_add(1);
-    let r = next_rand_u64();
+    let r = {
+        use std::hash::{BuildHasher, Hasher};
+        std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+    };
     let offset = r % modulus;
     half.saturating_add(offset)
-}
-
-/// Tiny xorshift64* PRNG. Thread-local, seeded once from the wall clock. Not
-/// cryptographically secure -- only used for jitter on retry delays.
-fn next_rand_u64() -> u64 {
-    use std::cell::Cell;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    thread_local! {
-        static STATE: Cell<u64> = const { Cell::new(0) };
-    }
-
-    STATE.with(|cell| {
-        let mut s = cell.get();
-        if s == 0 {
-            // Lazy seed from the wall clock; XORed with a fixed odd
-            // constant so a near-zero clock cannot leave the PRNG zeroed.
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0x9E37_79B9_7F4A_7C15);
-            s = nanos ^ 0xA076_1D64_78BD_642F_u64;
-            if s == 0 {
-                s = 0xA076_1D64_78BD_642F_u64;
-            }
-        }
-        // xorshift64*
-        s ^= s >> 12;
-        s ^= s << 25;
-        s ^= s >> 27;
-        cell.set(s);
-        s.wrapping_mul(0x2545_F491_4F6C_DD1D)
-    })
 }
 
 /// Validates S3 endpoint URL scheme. Requires `https://` except for localhost.
@@ -2671,24 +2642,6 @@ fn get_s3_credentials() -> Result<S3Credentials, BookieError> {
             warn!("Keyring read error: {e}");
             Err(BookieError::from(e))
         }
-    }
-}
-
-#[tauri::command(async)]
-fn delete_s3_credentials() -> Result<(), BookieError> {
-    info!("Deleting S3 credentials from keyring");
-    // `?` uses `From<keyring_core::error::Error>` -> `KeyringUnavailable`.
-    let entry = keyring_core::Entry::new(KEYRING_SERVICE, KEYRING_USER)?;
-
-    match entry.delete_credential() {
-        Ok(()) => {
-            info!("S3 credentials deleted successfully");
-            Ok(())
-        }
-        // Idempotent semantics: deleting an absent entry is a no-op success,
-        // matching the previous behaviour.
-        Err(keyring_core::error::Error::NoEntry) => Ok(()),
-        Err(e) => Err(BookieError::from(e)),
     }
 }
 
@@ -3838,7 +3791,6 @@ pub fn run() {
             s3_presign_download_url,
             store_s3_credentials,
             get_s3_credentials,
-            delete_s3_credentials,
             append_frontend_log,
             read_log_tail,
             schema_version_check,

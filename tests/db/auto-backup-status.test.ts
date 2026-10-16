@@ -19,10 +19,6 @@ mock.module("@tauri-apps/api/core", () => ({
       if (!keyring.creds) throw new Error("no_entry");
       return keyring.creds;
     }
-    if (cmd === "delete_s3_credentials") {
-      keyring.creds = null;
-      return;
-    }
     throw new Error(`unmocked invoke: ${cmd}`);
   },
 }));

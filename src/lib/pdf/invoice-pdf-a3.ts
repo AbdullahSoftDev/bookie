@@ -39,7 +39,7 @@ import { loadSrgbIcc } from "./assets";
 import type { InvoicePdfData } from "./invoice-pdf";
 import { createInvoicePdf } from "./invoice-pdf-writer";
 import type { InvoiceXmlData, XmlInvoiceFormat } from "./invoice-xml";
-import { renderInvoiceXml } from "./invoice-xml";
+import { escapeXml, renderInvoiceXml } from "./invoice-xml";
 
 /** Producer/creator strings shown in the PDF Info dict and in XMP. */
 const PRODUCER = "Bookie (pdf-lib)";
@@ -276,24 +276,24 @@ export function buildXmpMetadata(params: {
 				xmlns:dc="http://purl.org/dc/elements/1.1/">
 			<dc:title>
 				<rdf:Alt>
-					<rdf:li xml:lang="x-default">${escapeXmlText(title)}</rdf:li>
+					<rdf:li xml:lang="x-default">${escapeXml(title)}</rdf:li>
 				</rdf:Alt>
 			</dc:title>
 			<dc:creator>
 				<rdf:Seq>
-					<rdf:li>${escapeXmlText(author)}</rdf:li>
+					<rdf:li>${escapeXml(author)}</rdf:li>
 				</rdf:Seq>
 			</dc:creator>
 		</rdf:Description>
 		<rdf:Description rdf:about=""
 				xmlns:xmp="http://ns.adobe.com/xap/1.0/">
-			<xmp:CreatorTool>${escapeXmlText(creator)}</xmp:CreatorTool>
+			<xmp:CreatorTool>${escapeXml(creator)}</xmp:CreatorTool>
 			<xmp:CreateDate>${createIso}</xmp:CreateDate>
 			<xmp:ModifyDate>${modifyIso}</xmp:ModifyDate>
 		</rdf:Description>
 		<rdf:Description rdf:about=""
 				xmlns:pdf="http://ns.adobe.com/pdf/1.3/">
-			<pdf:Producer>${escapeXmlText(producer)}</pdf:Producer>
+			<pdf:Producer>${escapeXml(producer)}</pdf:Producer>
 		</rdf:Description>
 		<rdf:Description rdf:about=""
 				xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
@@ -353,19 +353,6 @@ function parseIsoDate(iso: string | null | undefined): Date | null {
   const ts = Date.UTC(yr, mo - 1, da);
   if (Number.isNaN(ts)) return null;
   return new Date(ts);
-}
-
-/**
- * XML-escape the five metacharacters. Used for XMP packet content,
- * which is XML.
- */
-function escapeXmlText(s: string): string {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
 }
 
 // Re-export structural helpers consumed by the test suite.

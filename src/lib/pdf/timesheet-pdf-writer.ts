@@ -4,8 +4,27 @@
  */
 
 import { PDFDocument, StandardFonts, rgb, type PDFPage, type PDFFont } from 'pdf-lib';
-import type { TimeSheetPdfData } from './timesheet-pdf';
 import { translations } from '$lib/i18n';
+
+export type TimeSheetPdfGroupEntry = {
+	entryDate: string;
+	description: string;
+	durationLabel: string;
+};
+
+export type TimeSheetPdfGroup = {
+	customerName: string;
+	periodLabel: string;
+	totalLabel: string;
+	entries: TimeSheetPdfGroupEntry[];
+};
+
+export type TimeSheetPdfData = {
+	createdAtLabel: string;
+	filtersLabel: string;
+	totalHoursLabel: string;
+	groups: TimeSheetPdfGroup[];
+};
 
 // -- A4 dimensions & margins (mm) --
 const PW = 210;

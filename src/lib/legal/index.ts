@@ -18,7 +18,3 @@ export const LEGAL_COUNTRIES: { value: LegalCountry; label: string }[] = Object.
 export function getLegalProfile(countryCode: LegalCountry): LegalProfile {
 	return profiles[countryCode] ?? profiles.DE;
 }
-
-export function getAllProfiles(): LegalProfile[] {
-	return Object.values(profiles);
-}
