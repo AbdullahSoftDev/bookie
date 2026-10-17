@@ -23,19 +23,16 @@ export type ImportDocument = {
   projects: Row[];
   time_entries: Row[];
   invoices: Row[];
+  incoming_invoices: Row[];
+  recurring_entries: Row[];
 };
 export type ImportCounts = {
-  vat_taxes: number;
-  customers: number;
-  projects: number;
-  time_entries: number;
-  invoices: number;
+  [K in Exclude<keyof ImportDocument, "settings">]: number;
 };
 
-/** Not on the server yet, so not transferred. */
+/** Not transferred. */
 export const SKIPPED = [
-  "Eingangsrechnungen und ihre Belegdateien",
-  "Wiederkehrende Buchungen",
+  "Belegdateien der Eingangsrechnungen (bitte in bookie Cloud neu anhängen)",
   "S3-Backup-Einstellungen",
 ];
 
@@ -99,6 +96,9 @@ export async function buildImport(db: Db): Promise<ImportDocument> {
       payments: payments.get(i.id) ?? [],
       status_history: history.get(i.id) ?? [],
     })),
+    // Metadata only: receipt files stay local (s3_key/local_path are ignored by the server).
+    incoming_invoices: await rows("incoming_invoices"),
+    recurring_entries: await rows("recurring_entries"),
   };
 }
 
@@ -108,6 +108,8 @@ export const countsOf = (d: ImportDocument): ImportCounts => ({
   projects: d.projects.length,
   time_entries: d.time_entries.length,
   invoices: d.invoices.length,
+  incoming_invoices: d.incoming_invoices.length,
+  recurring_entries: d.recurring_entries.length,
 });
 
 export const readLocalImport = async () => buildImport(await getLocalDb());

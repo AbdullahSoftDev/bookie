@@ -21,6 +21,7 @@
  */
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { api, cloud } from "$lib/cloud";
 import { getDb } from "./connection";
 import type { Customer, Invoice, Payment } from "./types";
 
@@ -53,6 +54,8 @@ export interface CustomerExportBundle {
 export async function collectCustomerData(
   customerId: number,
 ): Promise<CustomerExportBundle> {
+  // Cloud: same bundle from the server (admin only); ZIP and PDF stay client-side.
+  if (cloud()) return api(`/api/customers/${customerId}/dsgvo`);
   const db = await getDb();
 
   const customerRows = await db.select<Customer[]>(

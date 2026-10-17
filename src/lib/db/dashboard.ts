@@ -1,3 +1,4 @@
+import { api, cloud } from "$lib/cloud";
 import { getDb } from "./connection";
 import { createLogger } from "$lib/logger";
 
@@ -95,7 +96,15 @@ export interface ActionItems {
   openIncoming: { count: number; totalCents: number };
 }
 
+// Cloud: one server call returns revenue, costs and action items (euros like here).
+const remoteDashboard = (year: number, groupBy: GroupBy) =>
+  api<DashboardData & { actions: ActionItems }>(
+    `/api/reports/dashboard?year=${year}&groupBy=${groupBy}`,
+  );
+
 export async function getActionItems(companyId: number): Promise<ActionItems> {
+  if (cloud())
+    return (await remoteDashboard(new Date().getFullYear(), "year")).actions;
   const db = await getDb();
 
   const overdueItems = await db.select<OverdueInvoice[]>(
@@ -139,6 +148,10 @@ export async function getDashboardData(
   year: number,
   groupBy: GroupBy,
 ): Promise<DashboardData> {
+  if (cloud()) {
+    const { revenue, costs } = await remoteDashboard(year, groupBy);
+    return { revenue, costs };
+  }
   const [revenue, costs] = await Promise.all([
     getRevenueByPeriod(companyId, year, groupBy),
     getCostsByPeriod(companyId, year, groupBy),

@@ -2,17 +2,79 @@
 // customers, projects, time entries) call its REST API instead of the local
 // SQLite file, and every other local query refuses (see getDb), so local and
 // cloud ids never mix.
+//
+// url and email live in localStorage, the session token in the OS keyring
+// (loadCloudToken() fills `token` before the first cloud() call).
+
+import { invoke } from "@tauri-apps/api/core";
 
 const KEY = "bookie.cloud";
 
 export type CloudSession = { url: string; token: string; email: string };
 
-export function cloud(): CloudSession | null {
+let token: string | null = null;
+/** Boot could not read the keyring: signed out although url/email are saved. */
+export let keyringError = false;
+
+/** url/email of the last session (prefills the login form), even without a token. */
+export function savedAccount(): { url: string; email: string } | null {
   try {
     return JSON.parse(localStorage.getItem(KEY) ?? "null");
   } catch {
+    return null;
+  }
+}
+
+export function cloud(): CloudSession | null {
+  try {
+    const s = JSON.parse(localStorage.getItem(KEY) ?? "null");
+    // s.token: a session from before the keyring move (loadCloudToken moves it), or tests.
+    const t = token ?? s?.token;
+    return s && t ? { url: s.url, email: s.email, token: t } : null;
+  } catch {
     return null; // no localStorage (tests) = local mode
   }
+}
+
+// Keyring unavailable (e.g. no Secret Service on Linux): the token stays in
+// memory only, so the session lasts until the app closes.
+async function storeToken(t: string | null): Promise<boolean> {
+  token = t;
+  try {
+    await invoke("set_cloud_token", { token: t });
+    return true;
+  } catch (e) {
+    console.warn("[cloud] keyring", e);
+    return false;
+  }
+}
+
+/** Boot: loads the session token from the OS keyring; moves a legacy localStorage token there. */
+export async function loadCloudToken(): Promise<void> {
+  let s: { url: string; email: string; token?: string } | null;
+  try {
+    s = JSON.parse(localStorage.getItem(KEY) ?? "null");
+  } catch {
+    return;
+  }
+  if (!s) return;
+  if (s.token) {
+    // Strip it from localStorage only once the keyring holds it.
+    if (await storeToken(s.token))
+      localStorage.setItem(KEY, JSON.stringify({ url: s.url, email: s.email }));
+    return;
+  }
+  try {
+    token = await invoke<string | null>("get_cloud_token");
+  } catch (e) {
+    keyringError = true;
+    console.warn("[cloud] keyring", e);
+  }
+}
+
+function signOut() {
+  localStorage.removeItem(KEY);
+  void storeToken(null);
 }
 
 export class CloudError extends Error {
@@ -48,7 +110,7 @@ async function request<T>(
   // Only "unauthorized" means the session is gone; a 401 invalid_credentials
   // (wrong current password on change / 2FA disable) must not sign out.
   if (res.status === 401 && token && data?.error === "unauthorized") {
-    localStorage.removeItem(KEY);
+    signOut();
     throw new CloudError(
       401,
       "session_expired",
@@ -121,12 +183,13 @@ export async function login(
       ...secondFactor(code),
     });
   }
-  localStorage.setItem(KEY, JSON.stringify({ url, token: r.token, email }));
+  await storeToken(r.token!);
+  localStorage.setItem(KEY, JSON.stringify({ url, email }));
 }
 
 export async function logout(): Promise<void> {
   await api("/auth/logout", "POST", {}).catch(() => {}); // local sign-out even if the server is gone
-  localStorage.removeItem(KEY);
+  signOut();
 }
 
 export type Me = {

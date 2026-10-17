@@ -196,13 +196,10 @@
 		</details>
 	{/if}
 
-	<!-- Recurring invoices are not on bookie-server yet. -->
-	{#if !cloud()}
 	<label class="flex w-fit items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200">
 		<input type="checkbox" bind:checked={recurring} class="h-4 w-4 rounded border-zinc-300" />
 		{t('common.recurringMonthly')}
 	</label>
-	{/if}
 
 	<InvoiceForm
 		mode="create"
