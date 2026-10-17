@@ -1,4 +1,4 @@
-import { api, cloud, resource } from "$lib/cloud";
+import { api, cloud, CloudError, resource } from "$lib/cloud";
 import { getDb, withTransaction, safeFields } from "./connection";
 import { assertOutsideRetention } from "./retention";
 import {
@@ -451,9 +451,18 @@ export async function updateInvoicePaidDate(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(paidDate)) {
     throw new Error(`Ungültiges Zahlungsdatum: ${paidDate}`);
   }
-  // ponytail: the server has no paid_date correction endpoint; add one before enabling this in cloud.
   if (cloud())
-    throw new Error("Zahlungsdatum kann in bookie Cloud nicht geändert werden");
+    return void (await api(`/api/invoices/${id}/paid-date`, "POST", {
+      paid_date: paidDate,
+    }).catch((e) =>
+      Promise.reject(
+        e instanceof CloudError && e.code === "not_paid"
+          ? new Error(
+              "Zahlungsdatum kann nur bei bezahlten Rechnungen geändert werden",
+            )
+          : e,
+      ),
+    ));
   const db = await getDb();
   const res = await db.execute(
     `UPDATE invoices
@@ -647,4 +656,26 @@ export async function cancelInvoice(
 
     return stornoId;
   });
+}
+
+/**
+ * Cloud only: a draft from the customer's approved, billable, not yet
+ * invoiced time entries (one item per entry, priced at the project's hourly
+ * rate). The server answers 400 no_entries when nothing matches.
+ * @returns the new draft's id.
+ */
+export async function createInvoiceFromTimeEntries(opts: {
+  customer_id: number;
+  project_id?: number | null;
+  from?: string | null;
+  to?: string | null;
+}): Promise<number> {
+  if (!cloud())
+    throw new Error("Rechnung aus Zeiteinträgen gibt es nur in bookie Cloud");
+  const body = Object.fromEntries(
+    Object.entries(opts).filter(([, v]) => v != null && v !== ""),
+  );
+  return (
+    await api<{ id: number }>("/api/invoices/from-time-entries", "POST", body)
+  ).id;
 }

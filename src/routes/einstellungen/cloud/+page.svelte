@@ -3,7 +3,7 @@
 	import { openUrl } from '@tauri-apps/plugin-opener';
 	import TextInput from '../../../common/TextInput.svelte';
 	import Security from './Security.svelte';
-	import { api, cloud, CloudError, login, logout, publicApi, type Me } from '$lib/cloud';
+	import { api, cloud, CloudError, keyringError, login, logout, publicApi, savedAccount, type Me } from '$lib/cloud';
 	import { messageForUnknown } from '$lib/shared/errors';
 	import { countsOf, pushImport, pushOrganization, readLocalImport, SKIPPED } from '$lib/cloud-import';
 
@@ -27,10 +27,11 @@
 		(e instanceof CloudError && MESSAGES[e.code]) || messageForUnknown(e);
 
 	const initial = cloud();
+	const saved = initial ?? savedAccount();
 	let session = $state(initial);
 	let mode = $state<'login' | 'register' | 'forgot'>('login');
-	let url = $state(initial?.url ?? 'http://localhost:3000');
-	let email = $state(initial?.email ?? '');
+	let url = $state(saved?.url ?? 'http://localhost:3000');
+	let email = $state(saved?.email ?? '');
 	let name = $state('');
 	let password = $state('');
 	let notice = $state('');
@@ -39,7 +40,9 @@
 	let companyName = $state('');
 	let me = $state<Me | null>(null);
 	let busy = $state(false);
-	let error = $state('');
+	let error = $state(
+		!initial && keyringError ? 'Schlüsselbund nicht erreichbar: Sitzung nicht geladen, bitte erneut anmelden.' : ''
+	);
 
 	const active = $derived(me?.companies.find((c) => c.id === me?.activeCompanyId));
 
@@ -135,7 +138,8 @@
 			const text =
 				`Einmalig in die Cloud-Firma „${target.name}“ übertragen:\n` +
 				`${c.customers} Kunden, ${c.projects} Projekte, ${c.time_entries} Zeiteinträge, ` +
-				`${c.invoices} Rechnungen, ${c.vat_taxes} MwSt-Sätze, Firmenstammdaten und die Rechnungseinstellungen.\n\n` +
+				`${c.invoices} Rechnungen, ${c.incoming_invoices} Eingangsrechnungen, ${c.recurring_entries} wiederkehrende Buchungen, ` +
+				`${c.vat_taxes} MwSt-Sätze, Firmenstammdaten und die Rechnungseinstellungen.\n\n` +
 				'Nur in eine leere Cloud-Firma möglich und nicht wiederholbar. Ausgestellte Rechnungen ' +
 				'behalten Nummer und Beträge; Zeiteinträge werden dir zugeordnet und sind nicht freigegeben. ' +
 				'Die lokale Datei bleibt unverändert.\n\n' +
@@ -144,7 +148,7 @@
 			try {
 				const r = await pushImport(doc);
 				await pushOrganization();
-				notice = `Übertragen: ${r.customers} Kunden, ${r.projects} Projekte, ${r.time_entries} Zeiteinträge, ${r.invoices} Rechnungen.`;
+				notice = `Übertragen: ${r.customers} Kunden, ${r.projects} Projekte, ${r.time_entries} Zeiteinträge, ${r.invoices} Rechnungen, ${r.incoming_invoices} Eingangsrechnungen, ${r.recurring_entries} wiederkehrende Buchungen.`;
 			} catch (e) {
 				if (!(e instanceof CloudError && e.code === 'company_not_empty')) throw e;
 				error = message(e);

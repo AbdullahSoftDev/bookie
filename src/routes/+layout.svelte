@@ -26,6 +26,7 @@
 		type BootStatus
 	} from '$lib/diagnostics/boot';
 	import { createLogger } from '$lib/logger';
+	import { loadCloudToken } from '$lib/cloud';
 
 	let { children }: { children: Snippet } = $props();
 
@@ -91,6 +92,9 @@
 			bootChecked = true;
 			return;
 		}
+		// The cloud session token comes from the OS keyring; pages call cloud()
+		// synchronously once bootChecked renders them.
+		await loadCloudToken();
 		// Run boot_check FIRST (before any side-effectful schedulers) so we
 		// never start auto-backup against a broken environment (e.g. a
 		// read-only app-data dir would just fail silently).

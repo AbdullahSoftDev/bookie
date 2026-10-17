@@ -44,6 +44,8 @@ export interface Project {
   description: string | null;
   status: string;
   hourly_rate: number | null;
+  /** Cloud: the server omitted the rate (no invoices/reports grant). */
+  hourly_rate_hidden?: boolean;
   starts_on: string | null;
   ends_on: string | null;
   created_at: string;

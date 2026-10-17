@@ -1,3 +1,4 @@
+import { api, cloud } from "$lib/cloud";
 import { getDb } from "./connection";
 import { periodExpr, yearBounds, type GroupBy } from "./dashboard";
 import { createLogger } from "$lib/logger";
@@ -72,6 +73,10 @@ export async function getUstvaData(
   year: number,
   groupBy: GroupBy,
 ): Promise<UstvaRow[]> {
+  if (cloud())
+    return api(
+      `/api/reports/ustva?from=${year}-01-01&to=${year}-12-31&groupBy=${groupBy}`,
+    );
   const db = await getDb();
   const expr = periodExpr(groupBy, "i.issue_date");
 
@@ -182,6 +187,7 @@ export async function getEuerData(
   year: number,
   groupBy: GroupBy,
 ): Promise<EuerRow[]> {
+  if (cloud()) return api(`/api/reports/euer?year=${year}&groupBy=${groupBy}`);
   const db = await getDb();
   const expr = periodExpr(groupBy, "paid_date");
 
@@ -266,6 +272,7 @@ export async function getEuerReport(
   from: string,
   to: string,
 ): Promise<EuerReport> {
+  if (cloud()) return api(`/api/reports/euer-report?from=${from}&to=${to}`);
   const db = await getDb();
 
   const incomeRows = await db.select<

@@ -749,7 +749,7 @@ inside');
         let cursor = std::io::Cursor::new(&buf);
         let mut zip = zip::ZipArchive::new(cursor).expect("open zip");
         let mut names: Vec<String> = (0..zip.len())
-            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
             .collect();
         names.sort();
         let expected = [

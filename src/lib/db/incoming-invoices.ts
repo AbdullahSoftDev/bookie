@@ -1,3 +1,4 @@
+import { api, cloud, CloudError, resource } from "$lib/cloud";
 import { getDb, safeFields } from "./connection";
 import type { IncomingInvoice } from "./types";
 
@@ -33,6 +34,21 @@ const ALLOWED_COLUMNS = [
   "notes",
 ] as const;
 
+// Cloud: the server owns company_id, gross, paid_date and the receipt key
+// (set via uploadReceipt); only these fields are sent.
+const CLOUD_FIELDS = [
+  "supplier_id",
+  "invoice_number",
+  "invoice_date",
+  "net_cents",
+  "tax_cents",
+  "status",
+  "notes",
+] as const;
+const remote = resource<IncomingInvoiceWithSupplier>("incoming-invoices");
+const toRemote = (data: object) =>
+  Object.fromEntries(safeFields(data as Record<string, unknown>, CLOUD_FIELDS));
+
 export interface IncomingInvoiceWithSupplier extends IncomingInvoice {
   supplier_name: string | null;
 }
@@ -49,6 +65,7 @@ export async function listIncomingInvoices(
   // COUNT(*) OVER() computes the total in a single pass without a second round-trip.
   const limit = opts?.limit ?? 200;
   const offset = opts?.offset ?? 0;
+  if (cloud()) return remote.page(limit, offset);
   const db = await getDb();
   const raw = await db.select<
     (IncomingInvoiceWithSupplier & { _total_count: number })[]
@@ -74,6 +91,7 @@ export async function listIncomingInvoices(
 export async function getIncomingInvoiceById(
   id: number,
 ): Promise<IncomingInvoice | undefined> {
+  if (cloud()) return remote.get(id);
   const db = await getDb();
   const rows = await db.select<IncomingInvoice[]>(
     "SELECT * FROM incoming_invoices WHERE id = $1",
@@ -85,6 +103,7 @@ export async function getIncomingInvoiceById(
 export async function createIncomingInvoice(
   data: CreateIncomingInvoice,
 ): Promise<number> {
+  if (cloud()) return remote.create(toRemote(data));
   const db = await getDb();
   // `gross_cents` is derived once at write time so the reader sees a
   // consistent total.
@@ -125,6 +144,7 @@ export async function updateIncomingInvoice(
   id: number,
   data: UpdateIncomingInvoice,
 ): Promise<void> {
+  if (cloud()) return remote.update(id, toRemote(data)); // server keeps gross_cents in sync
   const fields = safeFields(data, ALLOWED_COLUMNS);
   if (fields.length === 0) return;
 
@@ -171,6 +191,7 @@ export async function updateIncomingInvoiceStatus(
   id: number,
   status: string,
 ): Promise<void> {
+  if (cloud()) return remote.update(id, { status }); // same paid_date rules server-side
   const db = await getDb();
   // paid_date carries the Abfluss date (§ 11 EStG) for the EÜR: stamped on
   // the transition into 'bezahlt' (kept if already set), cleared on the way
@@ -190,6 +211,9 @@ export async function updateIncomingInvoiceStatus(
  * stamp records when the user clicked, not when the payment left the
  * account. Only legal while the bill is 'bezahlt'.
  */
+const NOT_PAID =
+  "Zahlungsdatum kann nur bei bezahlten Rechnungen geändert werden";
+
 export async function updateIncomingInvoicePaidDate(
   id: number,
   paidDate: string,
@@ -197,6 +221,16 @@ export async function updateIncomingInvoicePaidDate(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(paidDate)) {
     throw new Error(`Ungültiges Zahlungsdatum: ${paidDate}`);
   }
+  if (cloud())
+    return remote
+      .update(id, { paid_date: paidDate })
+      .catch((e) =>
+        Promise.reject(
+          e instanceof CloudError && e.code === "not_paid"
+            ? new Error(NOT_PAID)
+            : e,
+        ),
+      );
   const db = await getDb();
   const res = await db.execute(
     `UPDATE incoming_invoices
@@ -205,13 +239,12 @@ export async function updateIncomingInvoicePaidDate(
     [paidDate, id],
   );
   if (res.rowsAffected === 0) {
-    throw new Error(
-      "Zahlungsdatum kann nur bei bezahlten Rechnungen geändert werden",
-    );
+    throw new Error(NOT_PAID);
   }
 }
 
 export async function deleteIncomingInvoice(id: number): Promise<void> {
+  if (cloud()) return remote.remove(id); // the server deletes the receipt object too
   const db = await getDb();
   await db.execute("DELETE FROM incoming_invoices WHERE id = $1", [id]);
 }
@@ -229,6 +262,10 @@ export async function getIncomingInvoiceFile(id: number): Promise<
     }
   | undefined
 > {
+  if (cloud()) {
+    const r = await remote.get(id);
+    return r && { ...r, local_path: null };
+  }
   const db = await getDb();
   const rows = await db.select<
     {
@@ -242,4 +279,42 @@ export async function getIncomingInvoiceFile(id: number): Promise<
     [id],
   );
   return rows[0];
+}
+
+/**
+ * Cloud only: attach a receipt. The server presigns a PUT whose content-type
+ * and content-length are signed, so the bytes go straight to its bucket, then
+ * the upload is confirmed.
+ */
+export async function uploadReceipt(id: number, file: File): Promise<void> {
+  const { url, headers, invoice } = await api<{
+    url: string;
+    headers: Record<string, string>;
+    invoice: { s3_key: string };
+  }>(`/api/incoming-invoices/${id}/receipt-url`, "POST", {
+    content_type: file.type,
+    size: file.size,
+    file_name: file.name,
+  });
+  // content-length is set by fetch from the body; browsers refuse to set it by hand.
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { "content-type": headers["content-type"] },
+    body: file,
+  });
+  if (!res.ok) throw new Error(`Beleg-Upload fehlgeschlagen: ${res.status}`);
+  // Confirmed upload: the server deletes the receipt it replaced.
+  await api(`/api/incoming-invoices/${id}/receipt`, "POST", {
+    s3_key: invoice.s3_key,
+  });
+}
+
+/** Cloud only: the receipt bytes via a short-lived presigned GET. */
+export async function downloadReceipt(id: number): Promise<Uint8Array> {
+  const { url } = await api<{ url: string }>(
+    `/api/incoming-invoices/${id}/receipt`,
+  );
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Beleg-Download fehlgeschlagen: ${res.status}`);
+  return new Uint8Array(await res.arrayBuffer());
 }

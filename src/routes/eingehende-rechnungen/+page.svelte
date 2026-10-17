@@ -22,6 +22,8 @@
 		updateIncomingInvoicePaidDate,
 		deleteIncomingInvoice,
 		getIncomingInvoiceFile,
+		uploadReceipt,
+		downloadReceipt,
 		type IncomingInvoiceWithSupplier
 	} from '$lib/db/incoming-invoices';
 	import { snapshotIncoming, createRecurring } from '$lib/db/recurring';
@@ -29,6 +31,7 @@
 	import { getS3Settings } from '$lib/db/settings';
 	import { uploadFile, downloadFile as s3DownloadFile, deleteFile as s3DeleteFile } from '$lib/s3/client';
 	import { createLogger } from '$lib/logger';
+	import { cloud } from '$lib/cloud';
 	import type { Customer } from '$lib/db/types';
 	import EInvoicePreview from '../../common/EInvoicePreview.svelte';
 	import type { EInvoice } from '$lib/einvoice';
@@ -218,7 +221,8 @@
 		// `local_path` instead of the legacy `file_data` BLOB.
 		let localPath: string | null = null;
 
-		if (uploadFiles && uploadFiles.length > 0) {
+		// Cloud: the receipt goes to the server's bucket after the row exists (below).
+		if (!cloud() && uploadFiles && uploadFiles.length > 0) {
 			const file = uploadFiles[0];
 			fileName = file.name;
 			fileType = file.type;
@@ -261,6 +265,14 @@
 			local_path: localPath,
 			notes: form.notes.trim() || null
 		});
+
+		if (cloud() && uploadFiles && uploadFiles.length > 0) {
+			try {
+				await uploadReceipt(newId, uploadFiles[0]);
+			} catch (err) {
+				uploadError = `${t('incomingInvoices.s3UploadFailed')}: ${messageForUnknown(err)}`;
+			}
+		}
 
 		// Recurring: schedule the next copy one month out on the same day.
 		// The boot generator (see +layout) materialises it.
@@ -346,7 +358,7 @@
 	async function removeInvoice(id: number) {
 		if (!confirm(t('incomingInvoices.deleteConfirm'))) return;
 		const inv = invoices.find(i => i.id === id);
-		if (inv?.s3_key) {
+		if (!cloud() && inv?.s3_key) {
 			try {
 				const s3Config = await getS3Settings();
 				if (s3Config.enabled) await s3DeleteFile(s3Config, inv.s3_key);
@@ -362,6 +374,15 @@
 
 		const path = await save({ defaultPath: fileInfo.file_name });
 		if (!path) return;
+
+		if (cloud()) {
+			try {
+				await writeBinaryFile(path, await downloadReceipt(id));
+			} catch (err) {
+				uploadError = `${t('incomingInvoices.s3DownloadFailed')}: ${messageForUnknown(err)}`;
+			}
+			return;
+		}
 
 		// DAT-5.b: download path no longer falls through to a `file_data`
 		// BLOB. A row's PDF lives in exactly one place — S3 (`s3_key`) or

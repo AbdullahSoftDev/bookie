@@ -3,6 +3,7 @@ import {
   canChangeStatus,
   cancelInvoice,
   createInvoice,
+  createInvoiceFromTimeEntries,
   getInvoiceById,
   listAllInvoices,
   syncInvoiceItems,
@@ -11,6 +12,7 @@ import {
 } from "$lib/db/invoices";
 import { listByInvoice } from "$lib/db/invoice-items";
 import { createPayment, deletePayment } from "$lib/db/payments";
+import { hourlyRatePatch, listProjects, updateProject } from "$lib/db/projects";
 
 const saved = {
   localStorage: (globalThis as any).localStorage,
@@ -202,4 +204,50 @@ test("s3_key-only update sends nothing; storno and payments use nested routes", 
     path: "/api/invoices/2/payments/11",
   });
   await expect(deletePayment(11)).rejects.toThrow("invoiceId");
+});
+
+test("from-time-entries posts only the set filters and returns the draft id", async () => {
+  routes["POST /api/invoices/from-time-entries"] = [201, { id: 77 }];
+  expect(
+    await createInvoiceFromTimeEntries({
+      customer_id: 7,
+      project_id: null,
+      from: "2026-09-01",
+      to: "",
+    }),
+  ).toBe(77);
+  expect(calls[0]).toEqual({
+    method: "POST",
+    path: "/api/invoices/from-time-entries",
+    body: { customer_id: 7, from: "2026-09-01" },
+  });
+  routes["POST /api/invoices/from-time-entries"] = [
+    400,
+    { error: "no_entries" },
+  ];
+  await expect(
+    createInvoiceFromTimeEntries({ customer_id: 7 }),
+  ).rejects.toMatchObject({ code: "no_entries" });
+});
+
+test("a hidden hourly rate is marked on read and never sent back on save", async () => {
+  routes["GET /api/projects"] = [
+    200,
+    [
+      { id: 1, name: "A" }, // rate omitted: member without finance grant
+      { id: 2, name: "B", hourly_rate_cents: null },
+      { id: 3, name: "C", hourly_rate_cents: 8550 },
+    ],
+  ];
+  const [a, b, c] = await listProjects(1);
+  expect([a.hourly_rate_hidden, b.hourly_rate_hidden, c.hourly_rate]).toEqual([
+    true,
+    undefined,
+    85.5,
+  ]);
+  calls.length = 0;
+  await updateProject(1, { name: "A2", ...hourlyRatePatch(a, null) });
+  await updateProject(3, { ...hourlyRatePatch(c, 90) });
+  expect(calls[0].body).toEqual({ name: "A2" });
+  expect(calls[1].body).toEqual({ hourly_rate_cents: 9000 });
 });

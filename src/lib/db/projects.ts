@@ -23,11 +23,25 @@ type RemoteProject = Omit<Project, "hourly_rate"> & {
   hourly_rate_cents?: number | null;
 };
 const remote = resource<RemoteProject>("projects");
+// Omitted (not null) = hidden for this member; null = no rate set.
 const fromRemote = ({ hourly_rate_cents, ...p }: RemoteProject): Project => ({
   ...p,
   hourly_rate: hourly_rate_cents == null ? null : hourly_rate_cents / 100,
+  ...(hourly_rate_cents === undefined ? { hourly_rate_hidden: true } : {}),
 });
-const toRemote = ({ hourly_rate, ...p }: UpdateProject) =>
+
+/** The hourly_rate part of a save: nothing when the rate was hidden, so a member's save never wipes it. */
+export const hourlyRatePatch = (
+  project: Pick<Project, "hourly_rate_hidden">,
+  rate: number | null,
+): { hourly_rate?: number | null } =>
+  project.hourly_rate_hidden ? {} : { hourly_rate: rate };
+
+const toRemote = ({
+  hourly_rate,
+  hourly_rate_hidden: _,
+  ...p
+}: UpdateProject) =>
   hourly_rate === undefined
     ? p
     : {
