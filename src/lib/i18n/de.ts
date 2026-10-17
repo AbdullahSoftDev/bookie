@@ -433,6 +433,7 @@ export default {
     organisation: "Organisation",
     invoice: "Rechnung",
     vatTaxes: "MwSt.-Steuern",
+    recurring: "Wiederkehrend",
     backup: "Backup & Wiederherstellung",
     s3Storage: "S3-Speicher",
     orgTitle: "Organisation",

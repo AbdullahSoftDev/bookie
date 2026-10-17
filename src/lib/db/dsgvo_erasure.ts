@@ -37,6 +37,7 @@
  * sister flow) in shape and naming so the UI can compose them.
  */
 
+import { api, cloud, CloudError } from "$lib/cloud";
 import { getDb } from "./connection";
 import { isWithinRetention, retentionViolationError } from "./retention";
 import type { Customer, Invoice } from "./types";
@@ -102,6 +103,19 @@ export async function anonymizeCustomer(
   customerId: number,
   now: Date = new Date(),
 ): Promise<AnonymizationResult> {
+  // Cloud: the server applies the same retention rule and audits the refusal.
+  if (cloud())
+    return api<AnonymizationResult>(
+      `/api/customers/${customerId}/anonymize`,
+      "POST",
+      {},
+    ).catch((e) =>
+      Promise.reject(
+        e instanceof CloudError && e.code === "retention_period"
+          ? retentionViolationError(RETENTION_REFUSAL_REASON)
+          : e,
+      ),
+    );
   const db = await getDb();
 
   const customerRows = await db.select<Customer[]>(

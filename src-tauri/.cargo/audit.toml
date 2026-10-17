@@ -29,6 +29,14 @@ ignore = [
   # rustls-webpki reachable panic in CRL parsing. Same upstream chain as
   # RUSTSEC-2026-0098; remove together when aws-sdk-s3 bumps.
   "RUSTSEC-2026-0104",
+  # zip < 9 extraction flaws (SUID bits, symlink targets, permissions through
+  # symlinks). Our own zip is 9; zip 4.6.1 remains via tauri-plugin-updater
+  # 2.14, which only extracts update archives after the minisign signature
+  # check, so an attacker needs our signing key. No fixed 2.x as of
+  # 2026-10-17; remove once tauri-plugin-updater bumps zip to >= 9.
+  "RUSTSEC-2026-0367",
+  "RUSTSEC-2026-0368",
+  "RUSTSEC-2026-0369",
 
   # --- Unmaintained crates (transitive, no action available) ---
   # gtk-rs GTK3 bindings, all unmaintained. Pulled in by Tauri/wry on Linux.

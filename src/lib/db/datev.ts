@@ -1,3 +1,4 @@
+import { api, cloud } from "$lib/cloud";
 import { getDb } from "./connection";
 import { yearBounds } from "./dashboard";
 import { createLogger } from "$lib/logger";
@@ -38,6 +39,10 @@ export async function getDatevBookingRows(
   companyId: number,
   year: number,
 ): Promise<DatevBooking[]> {
+  if (cloud())
+    return api(
+      `/api/reports/datev-bookings?from=${year}-01-01&to=${year}-12-31`,
+    );
   const db = await getDb();
 
   const revenueRows = await db.select<RevenueRow[]>(

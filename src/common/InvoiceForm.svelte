@@ -11,7 +11,8 @@
 		listVatTaxes
 	} from '$lib/db/settings';
 	import { uploadFile, uploadInvoicePdf, presignDownloadUrl } from '$lib/s3/client';
-	import type { Company, Customer, VatTax } from '$lib/db/types';
+	import type { Company, Customer, Invoice, VatTax } from '$lib/db/types';
+	import { cloud } from '$lib/cloud';
 	import { generateInvoiceHtml, type InvoicePdfData } from '$lib/pdf/invoice-pdf';
 	import { generateInvoiceNumber as formatInvoiceNumber } from '$lib/invoice-number';
 	import { writeBinaryFile } from '$lib/fs';
@@ -53,6 +54,8 @@
 		onSave: (data: SaveData) => Promise<void>;
 		onS3KeyUpdate?: (s3Key: string) => void;
 		readonly?: boolean;
+		/** Cloud: the issued invoice from the server; its issuer/recipient snapshot goes on the PDF. */
+		snapshot?: Invoice | null;
 	};
 
 	export type SaveData = {
@@ -97,7 +100,8 @@
 		initialLegalCountry = '',
 		onSave,
 		onS3KeyUpdate,
-		readonly = false
+		readonly = false,
+		snapshot = null
 	}: Props = $props();
 
 	const emptyItem = (): LineItem => ({
@@ -229,6 +233,13 @@
 			legalCountry = initialLegalCountry || 'DE';
 			items = initialItems.length > 0 ? initialItems : [emptyItem()];
 		}
+		// Cloud drafts have no number yet (the server assigns it on issue): show the expected one.
+		if (cloud() && !invoiceNumber) {
+			invoiceNumber = formatInvoiceNumber(
+				invoiceSettings.invoice_number_format,
+				invoiceSettings.invoice_number_incrementor
+			);
+		}
 
 		loading = false;
 	}
@@ -300,7 +311,24 @@
 				netAmountCents: toCents(g.netAmount),
 				amountCents: toCents(g.amount)
 			})),
-			totalCents: toCents(grossTotal)
+			totalCents: toCents(grossTotal),
+			...(snapshot ? snapshotPdfFields(snapshot) : {})
+		};
+	}
+
+	function snapshotPdfFields(inv: Invoice): Partial<InvoicePdfData> {
+		return {
+			issuerName: inv.issuer_name ?? '',
+			issuerTaxNumber: inv.issuer_tax_number ?? '',
+			issuerVatId: inv.issuer_vat_id ?? '',
+			issuerBankAccountHolder: inv.issuer_bank_account_holder ?? '',
+			issuerBankName: inv.issuer_bank_name ?? '',
+			issuerBankIban: inv.issuer_bank_iban ?? '',
+			issuerBankBic: inv.issuer_bank_bic ?? '',
+			recipientName: inv.recipient_name ?? '',
+			recipientAddress: [inv.recipient_street, [inv.recipient_postal_code, inv.recipient_city].filter(Boolean).join(' ')]
+				.filter(Boolean)
+				.join(', ')
 		};
 	}
 
@@ -416,8 +444,9 @@
 		});
 
 		try {
-			const s3Config = await getS3Settings();
-			if (s3Config.enabled) {
+			// S3 archival stays desktop-only for now (cloud has no S3 settings of its own yet).
+			const s3Config = cloud() ? null : await getS3Settings();
+			if (s3Config?.enabled) {
 				const data = buildPdfData();
 				const eInvoice = prepareEInvoice(data);
 				// XRechnung is XML-only: S3 gets the XML (the legal original) next to the visual PDF.
@@ -486,7 +515,7 @@
 						placeholder={t('invoiceForm.selectCustomerPlaceholder')}
 						disabled={!isEditable}
 					/>
-					<TextInput bind:value={invoiceNumber} label={t('invoiceForm.invoiceNumber')} disabled={!isEditable} />
+					<TextInput bind:value={invoiceNumber} label={t('invoiceForm.invoiceNumber')} disabled={!isEditable || !!cloud()} />
 					<Select bind:value={currency} label={t('invoiceForm.currency')} options={CURRENCIES} disabled={!isEditable} />
 				</div>
 

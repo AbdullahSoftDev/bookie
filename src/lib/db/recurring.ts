@@ -1,3 +1,4 @@
+import { api, cloud } from "$lib/cloud";
 import { getDb } from "./connection";
 import { createInvoice, getInvoiceById } from "./invoices";
 import { createInvoiceItem, listByInvoice } from "./invoice-items";
@@ -33,6 +34,11 @@ export type NewRecurring = {
 };
 
 export async function createRecurring(data: NewRecurring): Promise<number> {
+  if (cloud()) {
+    // The server scopes to the active company and validates the payload against it.
+    const { company_id: _, ...body } = data;
+    return (await api<{ id: number }>("/api/recurring", "POST", body)).id;
+  }
   const db = await getDb();
   const result = await db.execute(
     `INSERT INTO recurring_entries
@@ -50,6 +56,60 @@ export async function createRecurring(data: NewRecurring): Promise<number> {
     ],
   );
   return result.lastInsertId!;
+}
+
+const EDITABLE = [
+  "label",
+  "frequency",
+  "interval_count",
+  "next_run_date",
+  "end_date",
+  "active",
+] as const;
+export type RecurringPatch = Partial<
+  Pick<RecurringEntry, (typeof EDITABLE)[number]>
+>;
+
+/** All schedules, next due first. Cloud: only the kinds the caller's grants show. */
+export async function listRecurring(): Promise<RecurringEntry[]> {
+  if (cloud()) {
+    const rows = await api<(RecurringEntry & { payload: unknown })[]>(
+      "/api/recurring",
+    );
+    return rows.map((r) => ({ ...r, payload: JSON.stringify(r.payload) }));
+  }
+  const db = await getDb();
+  return db.select<RecurringEntry[]>(
+    "SELECT * FROM recurring_entries ORDER BY next_run_date, id",
+  );
+}
+
+export async function updateRecurring(
+  id: number,
+  patch: RecurringPatch,
+): Promise<void> {
+  if (cloud()) {
+    await api(`/api/recurring/${id}`, "PATCH", patch);
+    return;
+  }
+  // Column names only from EDITABLE, never from the patch object.
+  const cols = EDITABLE.filter((c) => c in patch);
+  if (!cols.length) return;
+  const db = await getDb();
+  await db.execute(
+    `UPDATE recurring_entries SET ${cols.map((c, i) => `${c} = $${i + 1}`).join(", ")},
+       updated_at = CURRENT_TIMESTAMP WHERE id = $${cols.length + 1}`,
+    [...cols.map((c) => patch[c]), id],
+  );
+}
+
+export async function deleteRecurring(id: number): Promise<void> {
+  if (cloud()) {
+    await api(`/api/recurring/${id}`, "DELETE");
+    return;
+  }
+  const db = await getDb();
+  await db.execute("DELETE FROM recurring_entries WHERE id = $1", [id]);
 }
 
 // --- snapshot builders: turn an existing entry into a reusable payload ---
@@ -188,6 +248,7 @@ export async function runDueRecurring(
   companyId: number,
   today: string,
 ): Promise<number> {
+  if (cloud()) return 0; // bookie-server materialises due entries hourly
   const db = await getDb();
   const due = await db.select<RecurringEntry[]>(
     `SELECT * FROM recurring_entries
