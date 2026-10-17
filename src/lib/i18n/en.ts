@@ -430,6 +430,7 @@ export default {
     organisation: "Organisation",
     invoice: "Invoice",
     vatTaxes: "VAT Taxes",
+    recurring: "Recurring",
     backup: "Backup & Restore",
     s3Storage: "S3 Storage",
     orgTitle: "Organisation",

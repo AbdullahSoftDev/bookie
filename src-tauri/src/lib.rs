@@ -2641,6 +2641,39 @@ fn get_s3_credentials() -> Result<S3Credentials, BookieError> {
     }
 }
 
+// --- Keyring commands for the bookie Cloud session token ---
+
+const KEYRING_CLOUD_USER: &str = "cloud_session";
+
+/// The stored session token, `None` when signed out.
+#[tauri::command(async)]
+fn get_cloud_token() -> Result<Option<String>, BookieError> {
+    match keyring_core::Entry::new(KEYRING_SERVICE, KEYRING_CLOUD_USER)?.get_password() {
+        Ok(token) => Ok(Some(token)),
+        Err(keyring_core::error::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Stores the session token, or deletes it with `None` (sign-out).
+#[tauri::command(async)]
+fn set_cloud_token(token: Option<String>) -> Result<(), BookieError> {
+    let entry = keyring_core::Entry::new(KEYRING_SERVICE, KEYRING_CLOUD_USER)?;
+    match token {
+        Some(t) if !t.is_empty() => entry.set_password(&t)?,
+        Some(_) => {
+            return Err(BookieError::Unknown {
+                message: "Session token must not be empty".to_string(),
+            })
+        }
+        None => match entry.delete_credential() {
+            Ok(()) | Err(keyring_core::error::Error::NoEntry) => {}
+            Err(e) => return Err(e.into()),
+        },
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod pure_helper_tests {
     use super::{is_sqlite_backup, sha256_hex, validate_restore_bytes, SQLITE_MAGIC};
@@ -3787,6 +3820,8 @@ pub fn run() {
             s3_presign_download_url,
             store_s3_credentials,
             get_s3_credentials,
+            get_cloud_token,
+            set_cloud_token,
             append_frontend_log,
             read_log_tail,
             schema_version_check,

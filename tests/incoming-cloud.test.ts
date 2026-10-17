@@ -110,12 +110,13 @@ test("paid date: validated locally, server not_paid maps to the local message", 
   expect(calls[0].body).toEqual({ paid_date: "2026-10-02" });
 });
 
-test("receipt: presign then PUT with the signed content-type; GET via presigned URL", async () => {
+test("receipt: presign, PUT with the signed content-type, confirm; GET via presigned URL", async () => {
   routes["POST /api/incoming-invoices/9/receipt-url"] = [
     200,
     {
       url: "https://bucket/k?sig",
       headers: { "content-type": "application/pdf", "content-length": "4" },
+      invoice: { s3_key: "companies/1/incoming/k" },
     },
   ];
   const file = new File([new Uint8Array(4)], "beleg.pdf", {
@@ -131,6 +132,11 @@ test("receipt: presign then PUT with the signed content-type; GET via presigned 
     url: "https://bucket/k?sig",
     method: "PUT",
     headers: { "content-type": "application/pdf" },
+  });
+  expect(calls[2]).toMatchObject({
+    url: "/api/incoming-invoices/9/receipt",
+    method: "POST",
+    body: { s3_key: "companies/1/incoming/k" },
   });
 
   routes["GET /api/incoming-invoices/9/receipt"] = [

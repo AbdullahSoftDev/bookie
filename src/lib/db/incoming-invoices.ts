@@ -283,12 +283,14 @@ export async function getIncomingInvoiceFile(id: number): Promise<
 
 /**
  * Cloud only: attach a receipt. The server presigns a PUT whose content-type
- * and content-length are signed, so the bytes go straight to its bucket.
+ * and content-length are signed, so the bytes go straight to its bucket, then
+ * the upload is confirmed.
  */
 export async function uploadReceipt(id: number, file: File): Promise<void> {
-  const { url, headers } = await api<{
+  const { url, headers, invoice } = await api<{
     url: string;
     headers: Record<string, string>;
+    invoice: { s3_key: string };
   }>(`/api/incoming-invoices/${id}/receipt-url`, "POST", {
     content_type: file.type,
     size: file.size,
@@ -301,6 +303,10 @@ export async function uploadReceipt(id: number, file: File): Promise<void> {
     body: file,
   });
   if (!res.ok) throw new Error(`Beleg-Upload fehlgeschlagen: ${res.status}`);
+  // Confirmed upload: the server deletes the receipt it replaced.
+  await api(`/api/incoming-invoices/${id}/receipt`, "POST", {
+    s3_key: invoice.s3_key,
+  });
 }
 
 /** Cloud only: the receipt bytes via a short-lived presigned GET. */

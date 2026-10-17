@@ -420,3 +420,52 @@ test.skipIf(!has)(
     }
   },
 );
+
+test.skipIf(!has)(
+  "recurring schedules list, edit (anchored month end) and delete through the server",
+  async () => {
+    const sdb = await testDb();
+    const server = startServer(sdb, 0);
+    const [u] =
+      await sdb.sql`INSERT INTO users (email, name, password_hash) VALUES ('r@x.de', 'U', ${await hashPassword("x")}) RETURNING id`;
+    const [c] =
+      await sdb.sql`INSERT INTO companies (name, subscription_status) VALUES ('C', 'active') RETURNING id`;
+    await sdb.sql`INSERT INTO company_members (company_id, user_id, role) VALUES (${c.id}, ${u.id}, 'admin')`;
+    const token = await createSession(sdb, Number(u.id));
+    (globalThis as any).localStorage = {
+      getItem: () =>
+        JSON.stringify({ url: server.url.origin, token, email: "e" }),
+      removeItem() {},
+    };
+    try {
+      const id = await rec.createRecurring({
+        company_id: 0,
+        kind: "incoming",
+        label: "Miete",
+        frequency: "monthly",
+        interval_count: 1,
+        next_run_date: "2026-11-01",
+        end_date: null,
+        payload: { net_cents: 100000, tax_cents: 0 },
+      });
+      await rec.updateRecurring(id, {
+        label: "Büro",
+        next_run_date: "2026-01-31",
+        end_date: "2026-12-31",
+      });
+      const [r] = await rec.listRecurring();
+      expect(r).toMatchObject({ id, label: "Büro", next_run_date: "2026-01-31" });
+      expect(JSON.parse(r!.payload)).toMatchObject({ net_cents: 100000 });
+
+      expect(await runDue(sdb, "2026-03-01")).toBe(2); // Jan 31, Feb 28
+      expect((await rec.listRecurring())[0]!.next_run_date).toBe("2026-03-31");
+
+      await rec.updateRecurring(id, { active: 0 });
+      expect(await runDue(sdb, "2026-06-01")).toBe(0);
+      await rec.deleteRecurring(id);
+      expect(await rec.listRecurring()).toEqual([]);
+    } finally {
+      server.stop(true);
+    }
+  },
+);

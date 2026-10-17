@@ -3,7 +3,7 @@
 	import { openUrl } from '@tauri-apps/plugin-opener';
 	import TextInput from '../../../common/TextInput.svelte';
 	import Security from './Security.svelte';
-	import { api, cloud, CloudError, login, logout, publicApi, type Me } from '$lib/cloud';
+	import { api, cloud, CloudError, keyringError, login, logout, publicApi, savedAccount, type Me } from '$lib/cloud';
 	import { messageForUnknown } from '$lib/shared/errors';
 	import { countsOf, pushImport, pushOrganization, readLocalImport, SKIPPED } from '$lib/cloud-import';
 
@@ -27,10 +27,11 @@
 		(e instanceof CloudError && MESSAGES[e.code]) || messageForUnknown(e);
 
 	const initial = cloud();
+	const saved = initial ?? savedAccount();
 	let session = $state(initial);
 	let mode = $state<'login' | 'register' | 'forgot'>('login');
-	let url = $state(initial?.url ?? 'http://localhost:3000');
-	let email = $state(initial?.email ?? '');
+	let url = $state(saved?.url ?? 'http://localhost:3000');
+	let email = $state(saved?.email ?? '');
 	let name = $state('');
 	let password = $state('');
 	let notice = $state('');
@@ -39,7 +40,9 @@
 	let companyName = $state('');
 	let me = $state<Me | null>(null);
 	let busy = $state(false);
-	let error = $state('');
+	let error = $state(
+		!initial && keyringError ? 'Schlüsselbund nicht erreichbar: Sitzung nicht geladen, bitte erneut anmelden.' : ''
+	);
 
 	const active = $derived(me?.companies.find((c) => c.id === me?.activeCompanyId));
 
