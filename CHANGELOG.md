@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+- App identifier is now `com.logscale.bookie` (was `com.ranelkarimov.bookie`). On first start the old data
+  directories and keyring entries (S3 credentials, cloud session) move over automatically.
+
 ## [0.1.7] - 2026-10-14
 
 - Release pipeline: builds now upload into a single draft release and the release is only published after every

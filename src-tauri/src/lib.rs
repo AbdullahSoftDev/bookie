@@ -24,8 +24,11 @@ use tracing_subscriber::{
 };
 
 const DB_URL: &str = "sqlite:bookie.db";
-const KEYRING_SERVICE: &str = "com.ranelkarimov.bookie";
+const KEYRING_SERVICE: &str = "com.logscale.bookie";
 const KEYRING_USER: &str = "s3_credentials";
+/// Bundle identifier and keyring service up to v0.1.7. Its data dirs and
+/// keyring entries move over once at boot (`legacy_id_plugin`).
+const LEGACY_ID: &str = "com.ranelkarimov.bookie";
 
 /// OBS-3.a: highest migration version this build of Bookie expects in
 /// `_sqlx_migrations`. Must match the highest `NNNN` directory under
@@ -659,6 +662,31 @@ mod boot_check_tests {
     }
 
     #[test]
+    fn move_legacy_dir_moves_once_and_never_overwrites() {
+        let root = unique_dir("legacy");
+        let legacy = root.join(crate::LEGACY_ID);
+        let dir = root.join(crate::KEYRING_SERVICE);
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("bookie.db"), b"old").unwrap();
+        // An empty new dir (created by someone else first) still gets replaced.
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert!(crate::move_legacy_dir(&dir).unwrap());
+        assert_eq!(std::fs::read(dir.join("bookie.db")).unwrap(), b"old");
+        assert!(!legacy.exists());
+        assert!(
+            !crate::move_legacy_dir(&dir).unwrap(),
+            "nothing left to move"
+        );
+
+        // A non-empty new dir is never touched.
+        std::fs::create_dir_all(&legacy).unwrap();
+        assert!(!crate::move_legacy_dir(&dir).unwrap());
+        assert_eq!(std::fs::read(dir.join("bookie.db")).unwrap(), b"old");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn probe_app_data_dir_creates_missing_directory_and_succeeds() {
         let dir = unique_dir("missing");
         // Directory does NOT exist yet — probe must create it and still
@@ -768,7 +796,7 @@ mod boot_check_tests {
         // returns a well-formed BootCheck without panicking and that
         // the variant is one of the two expected shapes.
         let result = probe_keyring(
-            "com.ranelkarimov.bookie.test_probe",
+            "com.logscale.bookie.test_probe",
             "ops1a_unit_test_user_does_not_exist",
         );
         match result {
@@ -3813,6 +3841,73 @@ mod panic_hook_tests {
     }
 }
 
+/// Moves the sibling `<LEGACY_ID>` directory to `dir` unless `dir` already
+/// holds something. A rename, so `bookie.db` and its WAL move together.
+fn move_legacy_dir(dir: &Path) -> std::io::Result<bool> {
+    let legacy = dir.with_file_name(LEGACY_ID);
+    if !legacy.is_dir() {
+        return Ok(false);
+    }
+    if dir.exists() {
+        if fs::read_dir(dir)?.next().is_some() {
+            return Ok(false);
+        }
+        fs::remove_dir(dir)?;
+    }
+    fs::rename(&legacy, dir)?;
+    Ok(true)
+}
+
+/// Copies a keyring entry from `LEGACY_ID` to `KEYRING_SERVICE` if only the
+/// old one exists, then deletes the old one.
+fn move_legacy_keyring_entry(user: &str) -> Result<(), keyring_core::error::Error> {
+    let new = keyring_core::Entry::new(KEYRING_SERVICE, user)?;
+    if !matches!(new.get_password(), Err(keyring_core::error::Error::NoEntry)) {
+        return Ok(());
+    }
+    let old = keyring_core::Entry::new(LEGACY_ID, user)?;
+    match old.get_password() {
+        Ok(secret) => {
+            new.set_password(&secret)?;
+            old.delete_credential()
+        }
+        Err(keyring_core::error::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Moves data of installs from before the identifier change. A plugin so it
+/// runs before tauri-plugin-sql preloads `bookie.db` in its own setup; the
+/// tracing subscriber is not up yet, hence `eprintln!`.
+fn legacy_id_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("legacy-id")
+        .setup(|app, _api| {
+            let path = app.path();
+            // macOS/Windows share config and data dirs; the second rename is a no-op.
+            for dir in [
+                path.app_config_dir(),
+                path.app_data_dir(),
+                path.app_local_data_dir(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                match move_legacy_dir(&dir) {
+                    Ok(true) => eprintln!("moved legacy data dir to {}", dir.display()),
+                    Ok(false) => {}
+                    Err(e) => eprintln!("failed to move legacy data dir to {}: {e}", dir.display()),
+                }
+            }
+            for user in [KEYRING_USER, KEYRING_CLOUD_USER] {
+                if let Err(e) = move_legacy_keyring_entry(user) {
+                    eprintln!("failed to move legacy keyring entry {user}: {e}");
+                }
+            }
+            Ok(())
+        })
+        .build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Replace Tauri's default tokio runtime (worker threads = CPU count,
@@ -3865,6 +3960,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(legacy_id_plugin())
         .plugin(
             tauri_plugin_sql::Builder::new()
                 .add_migrations(DB_URL, app_migrations())
