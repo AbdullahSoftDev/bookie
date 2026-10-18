@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { api, cloud, CloudError, resource } from "$lib/cloud";
 import { getDb, safeFields } from "./connection";
 import { createLogger } from "$lib/logger";
+import { LEGAL_COUNTRIES } from "$lib/legal";
 import type {
   InvoiceSettings,
   OrganizationSettings,
@@ -100,6 +101,17 @@ async function getRemoteOrganization(): Promise<UpsertOrganizationSettings> {
   return org;
 }
 
+// The desktop field is free text ("Deutschland"); the server keeps the ISO
+// code the e-invoice uses as seller country. Unknown text: the legal country.
+const countryCode = (country: string, fallback: string) => {
+  const v = country.trim();
+  if (/^[a-z]{2}$/i.test(v)) return v.toUpperCase();
+  const hit = LEGAL_COUNTRIES.find(
+    (c) => c.label.toLowerCase() === v.toLowerCase(),
+  );
+  return hit?.value ?? (fallback || "DE");
+};
+
 async function saveRemoteOrganization({
   address: _,
   country,
@@ -115,7 +127,9 @@ async function saveRemoteOrganization({
   await api("/api/company", "PATCH", {
     ...company,
     vat_id: vatin,
-    ...(country ? { country_code: country } : {}), // NOT NULL on the server
+    ...(country // NOT NULL on the server
+      ? { country_code: countryCode(country, default_legal_country) }
+      : {}),
   });
   await api("/api/settings", "PATCH", {
     default_locale,
@@ -322,8 +336,9 @@ const S3_DEFAULT: UpsertS3Settings = {
  */
 export async function getS3Settings(
   withCredentials = true,
+  db?: Awaited<ReturnType<typeof getDb>>, // getLocalDb() for the cloud receipt transfer
 ): Promise<UpsertS3Settings> {
-  const db = await getDb();
+  db ??= await getDb();
   const rows = await db.select<S3Settings[]>(
     "SELECT * FROM settings_s3 WHERE id = 1",
   );
