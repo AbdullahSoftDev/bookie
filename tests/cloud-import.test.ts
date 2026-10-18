@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { buildImport, countsOf } from "$lib/cloud-import";
+import { buildImport, countsOf, pairReceipts } from "$lib/cloud-import";
 import { createTestDb, type TestDb } from "./db/harness";
 
 let db: TestDb;
@@ -107,4 +107,30 @@ test("buildImport: empty local db gives empty lists", async () => {
     incoming_invoices: 0,
     recurring_entries: 0,
   });
+});
+
+test("pairReceipts: content match, equal rows in id order, skips cloud rows with a receipt", () => {
+  const row = {
+    supplier_name: "Miete GmbH",
+    invoice_date: "2026-01-01",
+    net_cents: 100,
+    tax_cents: 19,
+    notes: "",
+  };
+  const local = [
+    { ...row, id: 2, s3_key: "b.pdf" },
+    { ...row, id: 1, s3_key: "a.pdf" },
+    { ...row, id: 3, invoice_number: "X", local_path: "/x.pdf" },
+    { ...row, id: 4, invoice_date: "2026-02-01" }, // no file
+  ];
+  const remote = [
+    { ...row, id: 11, notes: null, s3_key: null },
+    { ...row, id: 10, invoice_number: null, s3_key: null },
+    { ...row, id: 12, invoice_number: "X", s3_key: "companies/1/incoming/u" }, // already attached
+    { ...row, id: 13, invoice_date: "2026-02-01", s3_key: null },
+  ];
+  expect(pairReceipts(local, remote).map(([l, r]) => [l.id, r.id])).toEqual([
+    [1, 10],
+    [2, 11],
+  ]);
 });

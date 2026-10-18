@@ -4,7 +4,7 @@ import { createLogger } from "$lib/logger";
 
 const log = createLogger("s3-client");
 
-function buildConfig(settings: UpsertS3Settings) {
+export function buildConfig(settings: UpsertS3Settings) {
   if (!settings.access_key_id || !settings.secret_access_key) {
     throw new Error(
       "S3-Zugangsdaten fehlen. Bitte speichern Sie die S3-Einstellungen erneut.",

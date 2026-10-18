@@ -2144,6 +2144,129 @@ async fn s3_upload_bytes(
     .await
 }
 
+/// Only signed S3 URLs over TLS: the webview cannot use the presigned PUTs as a generic PUT.
+fn require_presigned(url: &str) -> Result<(), BookieError> {
+    let signed = url::Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "https" && u.query_pairs().any(|(k, _)| k == "X-Amz-Signature")
+    });
+    if signed {
+        Ok(())
+    } else {
+        Err(BookieError::IoError {
+            message: "not a presigned https URL".to_string(),
+        })
+    }
+}
+
+/// Where a local receipt lives: the user's own S3 bucket or a file on disk.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum ReceiptSource {
+    S3 { config: S3Config, key: String },
+    File { path: String },
+}
+
+fn receipt_error(e: impl std::fmt::Display) -> BookieError {
+    error!("receipt transfer failed: {e}");
+    BookieError::S3Unreachable
+}
+
+/// Size of a local receipt, so the cloud upload can be presigned and the
+/// transfer budgeted before any byte is read.
+#[tauri::command]
+async fn receipt_size(source: ReceiptSource) -> Result<u64, BookieError> {
+    run_blocking(move || match source {
+        ReceiptSource::S3 { config, key } => {
+            let client = config.build_client()?;
+            with_retry(|| client.head_object_size(&key), RetryPolicy::s3_default())
+                .map_err(receipt_error)
+        }
+        ReceiptSource::File { path } => {
+            fs::metadata(&path)
+                .map(|m| m.len())
+                .map_err(|e| BookieError::IoError {
+                    message: format!("Failed to read file: {e}"),
+                })
+        }
+    })
+    .await
+}
+
+/// Local receipt → bookie Cloud presigned PUT, entirely in Rust: streamed from
+/// the source (`size` bytes, from `receipt_size`) into the upload, so RAM use is
+/// a few buffers whatever the file size, nothing touches the disk and no byte
+/// crosses the IPC boundary.
+#[tauri::command]
+async fn copy_receipt(
+    source: ReceiptSource,
+    size: u64,
+    url: String,
+    content_type: String,
+) -> Result<(), BookieError> {
+    require_presigned(&url)?;
+    run_blocking(move || match source {
+        ReceiptSource::S3 { config, key } => {
+            let client = config.build_client()?;
+            with_retry(
+                || client.copy_to_presigned(&key, size, &url, &content_type),
+                RetryPolicy::s3_default(),
+            )
+            .map_err(receipt_error)
+        }
+        ReceiptSource::File { path } => with_retry(
+            || {
+                let mut file = fs::File::open(&path)
+                    .map_err(|e| s3::S3Error::Transport(format!("open: {e}")))?;
+                S3Client::put_presigned_stream(&url, &mut file, size, &content_type)
+            },
+            RetryPolicy::s3_default(),
+        )
+        .map_err(receipt_error),
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PresignedPutArgs {
+    url: String,
+    content_type: String,
+}
+
+/// Raw-body IPC like `s3_upload_file`: PUTs the bytes to a bookie Cloud
+/// presigned URL from Rust, so the cloud bucket needs no CORS rule.
+#[tauri::command]
+async fn put_presigned_url(request: tauri::ipc::Request<'_>) -> Result<(), BookieError> {
+    let args: PresignedPutArgs = request
+        .headers()
+        .get("x-bookie-args")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            serde_json::from_str(&percent_encoding::percent_decode_str(v).decode_utf8_lossy()).ok()
+        })
+        .ok_or_else(|| BookieError::IoError {
+            message: "put_presigned_url: missing or invalid x-bookie-args header".to_string(),
+        })?;
+    require_presigned(&args.url)?;
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err(BookieError::IoError {
+            message: "put_presigned_url: expected raw body".to_string(),
+        });
+    };
+    let data = data.clone();
+    run_blocking(move || {
+        with_retry(
+            || S3Client::put_presigned(&args.url, &data, &args.content_type),
+            RetryPolicy::s3_default(),
+        )
+        .map_err(|e| {
+            error!("presigned PUT failed: {e}");
+            BookieError::S3Unreachable
+        })
+    })
+    .await
+}
+
 /// Upload the live DB straight from disk to S3. The DB never crosses the IPC
 /// boundary and is never buffered whole — `put_object_from_file` streams it
 /// with a 64 KB window and returns the SHA-256 for the sidecar. Replaces the
@@ -3818,6 +3941,9 @@ pub fn run() {
             restore_db_backup,
             s3_delete_file,
             s3_presign_download_url,
+            put_presigned_url,
+            receipt_size,
+            copy_receipt,
             store_s3_credentials,
             get_s3_credentials,
             get_cloud_token,

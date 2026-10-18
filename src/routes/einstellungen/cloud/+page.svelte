@@ -5,7 +5,7 @@
 	import Security from './Security.svelte';
 	import { api, cloud, CloudError, keyringError, login, logout, publicApi, savedAccount, type Me } from '$lib/cloud';
 	import { messageForUnknown } from '$lib/shared/errors';
-	import { countsOf, pushImport, pushOrganization, readLocalImport, SKIPPED } from '$lib/cloud-import';
+	import { countsOf, pushImport, pushOrganization, pushReceipts, readLocalImport, SKIPPED, type ReceiptProgress } from '$lib/cloud-import';
 
 	const MESSAGES: Record<string, string> = {
 		invalid_credentials: 'E-Mail oder Passwort falsch.',
@@ -157,6 +157,7 @@
 			const r = await pushImport(doc);
 			await pushOrganization();
 			notice = `Lokale Daten übertragen: ${r.customers} Kunden, ${r.projects} Projekte, ${r.time_entries} Zeiteinträge, ${r.invoices} Rechnungen, ${r.incoming_invoices} Eingangsrechnungen, ${r.recurring_entries} wiederkehrende Buchungen. Nicht übertragen: ${SKIPPED.join(', ')}.`;
+			await transferReceipts().catch((e) => (error = message(e))); // the import itself went through
 		} catch (e) {
 			const filled = e instanceof CloudError && e.code === 'company_not_empty';
 			// Auto: a failure must not block loading /me; the button stays for a retry.
@@ -168,6 +169,15 @@
 	}
 
 	const transfer = (target: { id: number; name: string }) => run(() => importLocal(target, false));
+
+	// Receipt files after the import; repeatable, it only fills cloud rows without a receipt.
+	let progress = $state<ReceiptProgress | null>(null);
+	async function transferReceipts() {
+		const r = await pushReceipts((p) => (progress = p)).finally(() => (progress = null));
+		const done = `${r.done} Belegdateien übertragen.`;
+		notice = notice ? `${notice} ${done}` : done;
+		if (r.failed.length) error = `Nicht übertragen (bitte von Hand anhängen):\n${r.failed.join('\n')}`;
+	}
 
 	// Back from the Stripe page in the browser: pick up the new subscription status.
 	const onFocus = () => {
@@ -283,6 +293,17 @@
 					Status aktualisieren
 				</button>
 			</div>
+			{#if active.role === 'admin' && active.paid && imported.includes(active.id)}
+				<div class="space-y-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">
+					<p class="text-sm text-zinc-500 dark:text-zinc-400">
+						Belegdateien der übertragenen Eingangsrechnungen (lokaler S3-Speicher oder Festplatte)
+						an die Cloud-Einträge anhängen, die noch keinen Beleg haben.
+					</p>
+					<button class="btn-secondary" onclick={() => run(transferReceipts)} disabled={busy}>
+						Belege übertragen
+					</button>
+				</div>
+			{/if}
 			{#if active.role === 'admin' && active.paid && !imported.includes(active.id)}
 				<div class="space-y-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">
 					<h3 class="text-sm font-semibold">Lokale Daten in die Cloud übertragen</h3>
@@ -300,6 +321,14 @@
 		<button class="btn-secondary" onclick={signOut} disabled={busy}>Abmelden</button>
 	{/if}
 
+	{#if progress}
+		<div class="space-y-1">
+			<p class="text-xs">
+				Belege übertragen: {progress.done} / {progress.total}
+			</p>
+			<progress class="w-full" value={progress.done} max={progress.total || 1}></progress>
+		</div>
+	{/if}
 	{#if notice}<p class="text-xs text-green-600 dark:text-green-400">{notice}</p>{/if}
-	{#if error}<p class="text-xs text-red-600">{error}</p>{/if}
+	{#if error}<p class="whitespace-pre-line text-xs text-red-600">{error}</p>{/if}
 </section>

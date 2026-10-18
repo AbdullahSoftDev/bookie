@@ -6,12 +6,17 @@
 // recompute them. Rows go over as SELECT *: the server picks the columns it
 // knows and ignores the rest (company_id, timestamps, s3_key, ...).
 
+import { invoke } from "@tauri-apps/api/core";
 import { api, CloudError } from "$lib/cloud";
 import { getLocalDb } from "$lib/db/connection";
+import { attachReceipt } from "$lib/db/incoming-invoices";
 import {
+  getS3Settings,
   readOrganizationSettings,
   saveOrganizationSettings,
 } from "$lib/db/settings";
+import { messageForUnknown } from "$lib/shared/errors";
+import { buildConfig } from "$lib/s3/client";
 
 type Row = Record<string, unknown>;
 type Db = { select<T>(sql: string, params?: unknown[]): Promise<T> };
@@ -31,10 +36,7 @@ export type ImportCounts = {
 };
 
 /** Not transferred. */
-export const SKIPPED = [
-  "Belegdateien der Eingangsrechnungen (bitte in bookie Cloud neu anhängen)",
-  "S3-Backup-Einstellungen",
-];
+export const SKIPPED = ["S3-Backup-Einstellungen"];
 
 const byInvoice = (rows: Row[]) => {
   const m = new Map<unknown, Row[]>();
@@ -45,12 +47,16 @@ const byInvoice = (rows: Row[]) => {
   return m;
 };
 
+/** The company the app shows: the first by name. */
+const firstCompany = async (db: Db) =>
+  (await db.select<Row[]>("SELECT id FROM companies ORDER BY name LIMIT 1"))[0]
+    ?.id ?? null;
+
 /** The local data of the first company (the one the app shows) as an import document. */
 export async function buildImport(db: Db): Promise<ImportDocument> {
   const sel = (sql: string, params: unknown[] = []) =>
     db.select<Row[]>(sql, params);
-  const [company] = await sel("SELECT id FROM companies ORDER BY name LIMIT 1");
-  const cid = company?.id ?? null;
+  const cid = await firstCompany(db);
   const [inv] = await sel("SELECT * FROM settings_invoice WHERE id = 1");
   // Locale, e-invoice and DATEV keys live in settings_organization locally.
   const [org] = await sel("SELECT * FROM settings_organization WHERE id = 1");
@@ -96,7 +102,7 @@ export async function buildImport(db: Db): Promise<ImportDocument> {
       payments: payments.get(i.id) ?? [],
       status_history: history.get(i.id) ?? [],
     })),
-    // Metadata only: receipt files stay local (s3_key/local_path are ignored by the server).
+    // Metadata only (s3_key/local_path are ignored by the server); pushReceipts moves the files.
     incoming_invoices: await rows("incoming_invoices"),
     recurring_entries: await rows("recurring_entries"),
   };
@@ -129,3 +135,97 @@ export async function pushImport(doc: ImportDocument): Promise<ImportCounts> {
 /** Company master data (address, bank, tax ids) via the existing cloud save. */
 export const pushOrganization = async () =>
   saveOrganizationSettings(await readOrganizationSettings(await getLocalDb()));
+
+// The import gives no id mapping, so a local incoming invoice is found in the
+// cloud by its content; equal rows pair up in id order on both sides.
+const incomingKey = (r: Row) =>
+  JSON.stringify([
+    r.supplier_name ?? null,
+    r.invoice_number || null,
+    r.invoice_date,
+    Number(r.net_cents),
+    Number(r.tax_cents),
+    r.notes || null,
+  ]);
+
+/** Pairs every local row that has a receipt with its cloud twin that still has none. */
+export function pairReceipts(local: Row[], remote: Row[]): [Row, Row][] {
+  const byKey = new Map<string, Row[]>();
+  for (const r of [...remote].sort((a, b) => Number(a.id) - Number(b.id))) {
+    const k = incomingKey(r);
+    byKey.set(k, [...(byKey.get(k) ?? []), r]);
+  }
+  const pairs: [Row, Row][] = [];
+  for (const l of [...local].sort((a, b) => Number(a.id) - Number(b.id))) {
+    const twin = byKey.get(incomingKey(l))?.shift();
+    if (twin && (l.s3_key || l.local_path) && !twin.s3_key)
+      pairs.push([l, twin]);
+  }
+  return pairs;
+}
+
+export type ReceiptProgress = { done: number; total: number };
+
+// Receipts in flight at once. Each one streams from source to cloud bucket in
+// Rust (a few buffers of RAM whatever its size), so only the count is bounded.
+const PARALLEL = 8;
+
+/**
+ * Copies the receipt files of the local incoming invoices (local S3 bucket or
+ * disk) onto their cloud twins, PARALLEL at a time. The bytes stream from
+ * source to cloud bucket inside Rust (copy_receipt): never via the webview,
+ * never onto the disk. Repeatable: twins that have a receipt are skipped.
+ */
+export async function pushReceipts(
+  onProgress: (p: ReceiptProgress) => void = () => {},
+): Promise<{ done: number; failed: string[] }> {
+  const db = await getLocalDb();
+  const local = await db.select<Row[]>(
+    `SELECT ii.*, c.name AS supplier_name FROM incoming_invoices ii
+     LEFT JOIN customers c ON c.id = ii.supplier_id WHERE ii.company_id = $1`,
+    [await firstCompany(db)],
+  );
+  const pairs = pairReceipts(local, await api<Row[]>("/api/incoming-invoices"));
+  const s3 = pairs.some(([l]) => l.s3_key)
+    ? buildConfig(await getS3Settings(true, db))
+    : undefined;
+  const source = (l: Row) =>
+    l.s3_key
+      ? { kind: "s3", config: s3, key: String(l.s3_key) }
+      : { kind: "file", path: String(l.local_path) };
+
+  let next = 0;
+  let finished = 0;
+  let done = 0;
+  const failed: string[] = [];
+  onProgress({ done: 0, total: pairs.length });
+  const worker = async () => {
+    while (next < pairs.length) {
+      const [l, r] = pairs[next++];
+      try {
+        const src = source(l);
+        const size = await invoke<number>("receipt_size", { source: src });
+        await attachReceipt(
+          Number(r.id),
+          {
+            content_type: String(l.file_type || "application/pdf"),
+            size,
+            file_name: String(l.file_name || "Beleg"),
+          },
+          (url, contentType) =>
+            invoke("copy_receipt", { source: src, size, url, contentType }),
+        );
+        done++;
+      } catch (e) {
+        failed.push(
+          `${l.supplier_name ?? "?"} ${l.invoice_date} (${l.file_name ?? ""}): ${messageForUnknown(e)}`,
+        );
+      }
+      onProgress({ done: ++finished, total: pairs.length });
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(PARALLEL, pairs.length) }, worker),
+  );
+  return { done, failed };
+}

@@ -290,6 +290,93 @@ impl S3Client {
         self.send("PUT", key, body, Some(content_type)).map(|_| ())
     }
 
+    /// PUT to a URL presigned by bookie Cloud (receipt upload). Sent from Rust,
+    /// not the webview, so the cloud bucket needs no CORS rule.
+    pub fn put_presigned(url: &str, body: &[u8], content_type: &str) -> Result<(), S3Error> {
+        Self::put_presigned_stream(url, &mut &body[..], body.len() as u64, content_type)
+    }
+
+    /// Streaming variant: `size` goes out as Content-Length (the presigned URL
+    /// signs it), the body is read in ureq's buffers, never held whole.
+    pub fn put_presigned_stream(
+        url: &str,
+        body: &mut dyn Read,
+        size: u64,
+        content_type: &str,
+    ) -> Result<(), S3Error> {
+        let request = http::Request::put(url)
+            .header("content-type", content_type)
+            .header("content-length", size)
+            .body(ureq::SendBody::from_reader(body))
+            .map_err(|e| S3Error::Construction(e.to_string()))?;
+        let response = AGENT
+            .get_or_init(build_agent)
+            .run(request)
+            .map_err(|e| S3Error::Transport(e.to_string()))?;
+        let status = response.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(Self::status_error(status, response));
+        }
+        Ok(())
+    }
+
+    /// Streams `key` (`size` bytes, see `head_object_size`) straight into a
+    /// presigned PUT: RAM use is ureq's buffers whatever the size, nothing on disk.
+    pub fn copy_to_presigned(
+        &self,
+        key: &str,
+        size: u64,
+        url: &str,
+        content_type: &str,
+    ) -> Result<(), S3Error> {
+        let src = self.object_url(key);
+        let request = self.build_signed_request(
+            "GET",
+            &src,
+            &[],
+            SignableBody::Bytes(&[]),
+            ureq::SendBody::none(),
+            Self::base_settings(),
+        )?;
+        let response = self
+            .agent
+            .run(request)
+            .map_err(|e| S3Error::Transport(e.to_string()))?;
+        let status = response.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(Self::status_error(status, response));
+        }
+        let mut body = response.into_body();
+        let mut reader = body.with_config().limit(size).reader();
+        Self::put_presigned_stream(url, &mut reader, size, content_type)
+    }
+
+    /// Object size from a HEAD request (sizes the transfer before the download).
+    pub fn head_object_size(&self, key: &str) -> Result<u64, S3Error> {
+        let url = self.object_url(key);
+        let request = self.build_signed_request(
+            "HEAD",
+            &url,
+            &[],
+            SignableBody::Bytes(&[]),
+            (),
+            Self::base_settings(),
+        )?;
+        let response = self
+            .agent
+            .run(request)
+            .map_err(|e| S3Error::Transport(e.to_string()))?;
+        let status = response.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(Self::status_error(status, response));
+        }
+        response
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok()?.parse().ok())
+            .ok_or_else(|| S3Error::Transport("HEAD without content-length".to_string()))
+    }
+
     pub fn get_object(&self, key: &str) -> Result<Vec<u8>, S3Error> {
         self.send("GET", key, &[], None)
     }
