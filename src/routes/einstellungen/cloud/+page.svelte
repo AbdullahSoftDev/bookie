@@ -78,6 +78,9 @@
 				needsCode = true;
 				return;
 			}
+			// A fresh sign-in always offers the import again (ids of another server
+			// must not suppress it); the server refuses a non-empty company anyway.
+			localStorage.removeItem(IMPORTED);
 			location.reload();
 		});
 
@@ -119,7 +122,7 @@
 		run(async () => openUrl((await api<{ url: string }>(path, 'POST', {})).url));
 
 	// Local → cloud import, offered once per cloud company (admin, paid).
-	// shortcut: "already imported" is per device, so a second device auto-imports into the next empty paid company; move it to the server if users run several devices.
+	// shortcut: "already imported" is per device and reset on every sign-in, so a second device auto-imports into the next empty paid company; move it to the server if users run several devices.
 	const IMPORTED = 'bookie.cloud.imported';
 	const readImported = (): number[] => {
 		try {
