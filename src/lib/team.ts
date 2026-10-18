@@ -25,6 +25,25 @@ export type TeamMember = {
   cost_rate_cents: number | null;
   created_at: string;
   grants: Grant[];
+  project_ids: number[];
+};
+
+export type Invitation = {
+  id: number;
+  email: string;
+  role: "member" | "subcontractor";
+  cost_rate_cents: number | null;
+  expires_at: string;
+  accepted_at: string | null;
+  status: "pending" | "accepted" | "expired";
+};
+
+/** The caller's own hours (GET /api/me/hours). */
+export type HoursRow = {
+  project_id: number | null;
+  project_name: string | null;
+  minutes: number;
+  approved_minutes: number;
 };
 
 export type SubcontractorRow = {
@@ -56,6 +75,12 @@ export const invite = (
     role,
     cost_rate_cents: role === "subcontractor" ? toCents(costRateEur) : null,
   });
+
+export const listInvitations = () => api<Invitation[]>("/api/invitations");
+
+/** Open or expired invites only; accepted ones stay as history. */
+export const revokeInvitation = (id: number) =>
+  api(`/api/invitations/${id}`, "DELETE");
 
 /** Takes the bare token or the whole invite link (…/invite?token=…). */
 export const acceptInvitation = (tokenOrLink: string) =>
@@ -105,3 +130,43 @@ export const subcontractorReport = (month: string) =>
   api<SubcontractorRow[]>(
     `/api/reports/subcontractors?month=${encodeURIComponent(month)}`,
   );
+
+/** month = "YYYY-MM"; the caller's own hours per project in the active company. */
+export const myHours = (month: string) =>
+  api<HoursRow[]>(`/api/me/hours?month=${encodeURIComponent(month)}`);
+
+export type SubcontractorSummary = {
+  user_id: number;
+  user_name: string;
+  minutes: number;
+  approved_minutes: number;
+  cost_cents: number;
+  revenue_cents: number;
+  projects: SubcontractorRow[];
+};
+
+/** Report rows (one per subcontractor × project) -> one summary per subcontractor, report order kept. */
+export function summarize(rows: SubcontractorRow[]): SubcontractorSummary[] {
+  const by = new Map<number, SubcontractorSummary>();
+  for (const r of rows) {
+    const s =
+      by.get(r.user_id) ??
+      by
+        .set(r.user_id, {
+          user_id: r.user_id,
+          user_name: r.user_name,
+          minutes: 0,
+          approved_minutes: 0,
+          cost_cents: 0,
+          revenue_cents: 0,
+          projects: [],
+        })
+        .get(r.user_id)!;
+    s.minutes += r.minutes;
+    s.approved_minutes += r.approved_minutes;
+    s.cost_cents += r.cost_cents;
+    s.revenue_cents += r.revenue_cents;
+    s.projects.push(r);
+  }
+  return [...by.values()];
+}

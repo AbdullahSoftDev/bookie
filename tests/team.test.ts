@@ -43,6 +43,9 @@ test("wrappers send the server's request shapes", async () => {
   await team.approveMonth(7, "2026-09");
   await team.unapproveMonth(7, "2026-09");
   await team.subcontractorReport("2026-09");
+  await team.listInvitations();
+  await team.revokeInvitation(4);
+  await team.myHours("2026-09");
   expect(calls).toEqual([
     {
       path: "/api/invitations",
@@ -101,5 +104,26 @@ test("wrappers send the server's request shapes", async () => {
       method: "GET",
       body: undefined,
     },
+    { path: "/api/invitations", method: "GET", body: undefined },
+    { path: "/api/invitations/4", method: "DELETE", body: undefined },
+    { path: "/api/me/hours?month=2026-09", method: "GET", body: undefined },
+  ]);
+});
+
+test("summarize folds project rows into one total per subcontractor", () => {
+  const row = (user_id: number, project_id: number, minutes: number) => ({
+    user_id,
+    user_name: `U${user_id}`,
+    project_id,
+    project_name: `P${project_id}`,
+    minutes,
+    approved_minutes: minutes / 2,
+    cost_cents: minutes * 10,
+    revenue_cents: minutes * 20,
+  });
+  const out = team.summarize([row(1, 1, 60), row(1, 2, 30), row(2, 1, 120)]);
+  expect(out.map((s) => [s.user_id, s.minutes, s.approved_minutes, s.cost_cents, s.revenue_cents, s.projects.length])).toEqual([
+    [1, 90, 45, 900, 1800, 2],
+    [2, 120, 60, 1200, 2400, 1],
   ]);
 });
