@@ -4,6 +4,7 @@ import {
   type UpsertS3Settings,
 } from "$lib/db/settings";
 import { backupDbToS3 } from "$lib/s3/client";
+import { cloud } from "$lib/cloud";
 import { createLogger } from "$lib/logger";
 
 const log = createLogger("auto-backup");
@@ -56,6 +57,9 @@ export function classifyBackupError(e: unknown): string {
 }
 
 async function checkAndBackup(): Promise<void> {
+  // Cloud data lives on the server; the local SQLite file is not the source
+  // of truth (and getDb refuses). Checked per tick: the mode switches at runtime.
+  if (cloud()) return;
   try {
     // Flags only: the keychain is read later, and only if a backup is due.
     const s3 = await getS3Settings(false);
