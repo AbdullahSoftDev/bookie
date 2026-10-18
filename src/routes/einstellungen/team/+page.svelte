@@ -51,8 +51,7 @@
 	let rates = $state<Record<number, string>>({});
 	let grants = $state<Record<number, Record<team.Area, GrantLevel>>>({});
 	let projects = $state<Project[]>([]);
-	let projectId = $state<number | null>(null);
-	let assigned = $state<number[]>([]);
+	let editing = $state<number | null>(null);
 	let inviteEmail = $state('');
 	let inviteRole = $state<'member' | 'subcontractor'>('member');
 	let inviteRate = $state('');
@@ -119,7 +118,6 @@
 			])
 		);
 		projects = await listProjects(active.id);
-		if (projectId != null) assigned = await team.listAssignments(projectId);
 	}
 
 	async function run(fn: () => Promise<unknown>, done = '') {
@@ -197,17 +195,10 @@
 		}, 'Mitglied entfernt.');
 	};
 
-	const pickProject = (id: number | null) =>
+	const toggleAssignment = (userId: number, projectId: number, on: boolean) =>
 		run(async () => {
-			projectId = id;
-			assigned = id == null ? [] : await team.listAssignments(id);
-		});
-
-	const toggleAssignment = (userId: number, on: boolean) =>
-		run(async () => {
-			if (projectId == null) return;
 			await (on ? team.assign(projectId, userId) : team.unassign(projectId, userId));
-			assigned = await team.listAssignments(projectId);
+			members = await team.listMembers();
 		});
 
 	const approve = (on: boolean, userId = approveUser) =>
@@ -307,12 +298,40 @@
 											{/if}
 										</td>
 										<td class="px-3 py-2">
-											{#if m && m.project_ids.length === 0}
-												<span class="text-xs text-amber-700 dark:text-amber-400"
-													>keinem Projekt zugewiesen</span
-												>
+											{#if m && admin && editing === m.user_id}
+												<ul class="space-y-1">
+													{#each projects as p (p.id)}
+														<li>
+															<label class="flex items-center gap-2">
+																<input
+																	type="checkbox"
+																	checked={m.project_ids.includes(p.id)}
+																	disabled={busy}
+																	onchange={(e) =>
+																		toggleAssignment(m.user_id, p.id, e.currentTarget.checked)}
+																/>
+																{p.name}
+															</label>
+														</li>
+													{:else}
+														<li class="text-xs text-zinc-500">Noch keine Projekte angelegt.</li>
+													{/each}
+												</ul>
+												<button class="btn-secondary mt-2" onclick={() => (editing = null)}>Fertig</button>
 											{:else if m}
-												{m.project_ids.map(projectName).join(', ')}
+												{#if m.project_ids.length === 0}
+													<span class="text-xs text-amber-700 dark:text-amber-400"
+														>keinem Projekt zugewiesen</span
+													>
+												{:else}
+													{m.project_ids.map(projectName).join(', ')}
+												{/if}
+												{#if admin}
+													<button
+														class="ml-1 text-xs text-blue-600 underline dark:text-blue-400"
+														onclick={() => (editing = m.user_id)}>bearbeiten</button
+													>
+												{/if}
 											{/if}
 											{#each sum.projects as p (p.project_id)}
 												<div class="text-xs text-zinc-500">
@@ -369,7 +388,7 @@
 						</table>
 					</div>
 					<p class="text-xs text-zinc-500 dark:text-zinc-400">
-						Kosten = Stunden × Kostensatz (bei Freigabe festgeschrieben). Umsatz = abrechenbare Stunden ×
+						Subunternehmer sehen nur die Projekte, denen sie zugewiesen sind. Kosten = Stunden × Kostensatz (bei Freigabe festgeschrieben). Umsatz = abrechenbare Stunden ×
 						Projekt-Stundensatz.
 					</p>
 				{/if}
@@ -532,45 +551,6 @@
 							</tbody>
 						</table>
 					</div>
-				{/if}
-			</section>
-
-			<section class="card space-y-4">
-				<h2 class="text-base font-semibold">Projektzuweisungen</h2>
-				<p class="text-sm text-zinc-500 dark:text-zinc-400">
-					Subunternehmer sehen nur die Projekte, denen sie zugewiesen sind.
-				</p>
-				<div class="flex flex-col gap-1">
-					<label for="assign-project" class="label">Projekt</label>
-					<select
-						id="assign-project"
-						class="input-base input-valid"
-						value={projectId ?? ''}
-						onchange={(e) =>
-							pickProject(e.currentTarget.value ? Number(e.currentTarget.value) : null)}
-					>
-						<option value="">Projekt wählen…</option>
-						{#each projects as p (p.id)}
-							<option value={p.id}>{p.name}</option>
-						{/each}
-					</select>
-				</div>
-				{#if projectId != null}
-					<ul class="space-y-1 text-sm">
-						{#each members.filter((m) => m.role !== 'admin') as m (m.user_id)}
-							<li>
-								<label class="flex items-center gap-2">
-									<input
-										type="checkbox"
-										checked={assigned.includes(m.user_id)}
-										disabled={busy}
-										onchange={(e) => toggleAssignment(m.user_id, e.currentTarget.checked)}
-									/>
-									{m.name} <span class="text-zinc-500">({ROLES[m.role]})</span>
-								</label>
-							</li>
-						{/each}
-					</ul>
 				{/if}
 			</section>
 
