@@ -46,6 +46,16 @@ export type HoursRow = {
   approved_minutes: number;
 };
 
+/** A client project the caller works on as a subcontractor (GET /api/me/assignments). */
+export type Assignment = {
+  company_id: number;
+  company_name: string;
+  project_id: number;
+  project_name: string;
+  linked_company_id: number | null;
+  linked_project_id: number | null;
+};
+
 export type SubcontractorRow = {
   user_id: number;
   user_name: string;
@@ -134,6 +144,20 @@ export const subcontractorReport = (month: string) =>
 /** month = "YYYY-MM"; the caller's own hours per project in the active company. */
 export const myHours = (month: string) =>
   api<HoursRow[]>(`/api/me/hours?month=${encodeURIComponent(month)}`);
+
+/** Client projects across all companies, with the own project their hours mirror into. */
+export const myAssignments = () => api<Assignment[]>("/api/me/assignments");
+
+/** Mirrors the caller's hours on a client project into an own project of the active company. */
+export const linkProject = (sourceProjectId: number, projectId: number) =>
+  api<{ ok: true; mirrored: number }>("/api/project-links", "PUT", {
+    source_project_id: sourceProjectId,
+    project_id: projectId,
+  });
+
+/** Drops the link; copies already on an invoice stay. */
+export const unlinkProject = (sourceProjectId: number) =>
+  api(`/api/project-links/${sourceProjectId}`, "DELETE");
 
 export type SubcontractorSummary = {
   user_id: number;

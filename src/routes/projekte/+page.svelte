@@ -3,6 +3,7 @@
 	import Select from '../../common/Select.svelte';
 	import TextInput from '../../common/TextInput.svelte';
 	import DateInput from '../../common/DateInput.svelte';
+	import SubcontractorLinks from '../../common/SubcontractorLinks.svelte';
 	import { createCompany, listCompanies } from '$lib/db/companies';
 	import { listCustomers } from '$lib/db/customers';
 	import { createProject, hourlyRatePatch, listProjects, updateProject } from '$lib/db/projects';
@@ -148,6 +149,8 @@
 		<h1 class="page-header">{t('projects.title')}</h1>
 		<p class="text-sm text-zinc-600 dark:text-zinc-300">{t('projects.subtitle')}</p>
 	</header>
+
+	<SubcontractorLinks {projects} />
 
 	<AddEntryFormSection
 		title={t('projects.newTitle')}
