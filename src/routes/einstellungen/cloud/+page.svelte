@@ -50,7 +50,13 @@
 		if (session) await run(loadMe);
 	});
 
-	const loadMe = async () => (me = await api<Me>('/me'));
+	const loadMe = async () => {
+		me = await api<Me>('/me');
+		const a = me.companies.find((c) => c.id === me?.activeCompanyId);
+		// Switching to the cloud moves the local data along: automatically into the first
+		// paid company this device administers (the button covers any further company).
+		if (a?.role === 'admin' && a.paid && !imported.length) await importLocal(a, true);
+	};
 
 	async function run(fn: () => Promise<unknown>) {
 		busy = true;
@@ -113,6 +119,7 @@
 		run(async () => openUrl((await api<{ url: string }>(path, 'POST', {})).url));
 
 	// Local → cloud import, offered once per cloud company (admin, paid).
+	// shortcut: "already imported" is per device, so a second device auto-imports into the next empty paid company; move it to the server if users run several devices.
 	const IMPORTED = 'bookie.cloud.imported';
 	const readImported = (): number[] => {
 		try {
@@ -131,30 +138,36 @@
 		}
 	};
 
-	const transfer = (target: { id: number; name: string }) =>
-		run(async () => {
-			const doc = await readLocalImport();
-			const c = countsOf(doc);
-			const text =
-				`Einmalig in die Cloud-Firma „${target.name}“ übertragen:\n` +
-				`${c.customers} Kunden, ${c.projects} Projekte, ${c.time_entries} Zeiteinträge, ` +
-				`${c.invoices} Rechnungen, ${c.incoming_invoices} Eingangsrechnungen, ${c.recurring_entries} wiederkehrende Buchungen, ` +
-				`${c.vat_taxes} MwSt-Sätze, Firmenstammdaten und die Rechnungseinstellungen.\n\n` +
-				'Nur in eine leere Cloud-Firma möglich und nicht wiederholbar. Ausgestellte Rechnungen ' +
-				'behalten Nummer und Beträge; Zeiteinträge werden dir zugeordnet und sind nicht freigegeben. ' +
-				'Die lokale Datei bleibt unverändert.\n\n' +
-				`Nicht übertragen:\n- ${SKIPPED.join('\n- ')}`;
-			if (!confirm(text)) return;
-			try {
-				const r = await pushImport(doc);
-				await pushOrganization();
-				notice = `Übertragen: ${r.customers} Kunden, ${r.projects} Projekte, ${r.time_entries} Zeiteinträge, ${r.invoices} Rechnungen, ${r.incoming_invoices} Eingangsrechnungen, ${r.recurring_entries} wiederkehrende Buchungen.`;
-			} catch (e) {
-				if (!(e instanceof CloudError && e.code === 'company_not_empty')) throw e;
-				error = message(e);
-			}
-			markImported(target.id);
-		});
+	async function importLocal(target: { id: number; name: string }, auto: boolean) {
+		const doc = await readLocalImport();
+		const c = countsOf(doc);
+		const { vat_taxes, ...data } = c; // VAT rates are seeded locally, they alone are no data
+		if (auto && !Object.values(data).some(Boolean)) return;
+		const text =
+			`Einmalig in die Cloud-Firma „${target.name}“ übertragen:\n` +
+			`${c.customers} Kunden, ${c.projects} Projekte, ${c.time_entries} Zeiteinträge, ` +
+			`${c.invoices} Rechnungen, ${c.incoming_invoices} Eingangsrechnungen, ${c.recurring_entries} wiederkehrende Buchungen, ` +
+			`${c.vat_taxes} MwSt-Sätze, Firmenstammdaten und die Rechnungseinstellungen.\n\n` +
+			'Nur in eine leere Cloud-Firma möglich und nicht wiederholbar. Ausgestellte Rechnungen ' +
+			'behalten Nummer und Beträge; Zeiteinträge werden dir zugeordnet und sind nicht freigegeben. ' +
+			'Die lokale Datei bleibt unverändert.\n\n' +
+			`Nicht übertragen:\n- ${SKIPPED.join('\n- ')}`;
+		if (!auto && !confirm(text)) return;
+		try {
+			const r = await pushImport(doc);
+			await pushOrganization();
+			notice = `Lokale Daten übertragen: ${r.customers} Kunden, ${r.projects} Projekte, ${r.time_entries} Zeiteinträge, ${r.invoices} Rechnungen, ${r.incoming_invoices} Eingangsrechnungen, ${r.recurring_entries} wiederkehrende Buchungen. Nicht übertragen: ${SKIPPED.join(', ')}.`;
+		} catch (e) {
+			const filled = e instanceof CloudError && e.code === 'company_not_empty';
+			// Auto: a failure must not block loading /me; the button stays for a retry.
+			if (auto && !filled) return void (error = message(e));
+			if (!filled) throw e;
+			if (!auto) error = message(e);
+		}
+		markImported(target.id);
+	}
+
+	const transfer = (target: { id: number; name: string }) => run(() => importLocal(target, false));
 
 	// Back from the Stripe page in the browser: pick up the new subscription status.
 	const onFocus = () => {
