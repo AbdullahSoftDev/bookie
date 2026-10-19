@@ -77,6 +77,27 @@ test("organisation settings merge company + settings and map field names", async
   ]);
 });
 
+test("free-text country goes to the server as ISO code", async () => {
+  const org = await getOrganizationSettings();
+  for (const [country, code] of [
+    ["Deutschland", "DE"],
+    ["at", "AT"],
+    ["Österreich", "AT"],
+    ["Mars", "NL"], // unknown: the legal country
+  ]) {
+    calls.length = 0;
+    await saveOrganizationSettings({
+      ...org,
+      country,
+      default_legal_country: "NL",
+    });
+    expect(
+      calls.find((c) => c.path === "/api/company" && c.method === "PATCH")!.body
+        .country_code,
+    ).toBe(code);
+  }
+});
+
 test("lowering the invoice incrementor surfaces a readable error", async () => {
   routes["PATCH /api/settings"] = [409, { error: "incrementor_decrease" }];
   const data = {

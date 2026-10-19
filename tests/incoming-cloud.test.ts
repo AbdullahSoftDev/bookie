@@ -1,4 +1,17 @@
-import { afterAll, afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, mock, test } from "bun:test";
+
+// The receipt PUT goes through Rust (put_presigned_url), recorded like a fetch.
+mock.module("@tauri-apps/api/core", () => ({
+  invoke: async (cmd: string, body: Uint8Array, opts: any) => {
+    const args = JSON.parse(decodeURIComponent(opts.headers["x-bookie-args"]));
+    calls.push({
+      url: args.url,
+      method: cmd,
+      headers: { "content-type": args.contentType },
+      body,
+    });
+  },
+}));
 import {
   createIncomingInvoice,
   deleteIncomingInvoice,
@@ -130,9 +143,10 @@ test("receipt: presign, PUT with the signed content-type, confirm; GET via presi
   });
   expect(calls[1]).toMatchObject({
     url: "https://bucket/k?sig",
-    method: "PUT",
+    method: "put_presigned_url",
     headers: { "content-type": "application/pdf" },
   });
+  expect(calls[1].body).toEqual(new Uint8Array(4));
   expect(calls[2]).toMatchObject({
     url: "/api/incoming-invoices/9/receipt",
     method: "POST",

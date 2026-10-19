@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { api, cloud, CloudError, resource } from "$lib/cloud";
 import { getDb, safeFields } from "./connection";
 import type { IncomingInvoice } from "./types";
@@ -283,31 +284,42 @@ export async function getIncomingInvoiceFile(id: number): Promise<
 
 /**
  * Cloud only: attach a receipt. The server presigns a PUT whose content-type
- * and content-length are signed, so the bytes go straight to its bucket, then
- * the upload is confirmed.
+ * and content-length are signed, `put` sends the bytes straight to its bucket,
+ * then the upload is confirmed. The PUT runs in Rust: a webview fetch would
+ * need a CORS rule on the bucket.
  */
-export async function uploadReceipt(id: number, file: File): Promise<void> {
+export async function attachReceipt(
+  id: number,
+  meta: { content_type: string; size: number; file_name: string },
+  put: (url: string, contentType: string) => Promise<unknown>,
+): Promise<void> {
   const { url, headers, invoice } = await api<{
     url: string;
     headers: Record<string, string>;
     invoice: { s3_key: string };
-  }>(`/api/incoming-invoices/${id}/receipt-url`, "POST", {
-    content_type: file.type,
-    size: file.size,
-    file_name: file.name,
-  });
-  // content-length is set by fetch from the body; browsers refuse to set it by hand.
-  const res = await fetch(url, {
-    method: "PUT",
-    headers: { "content-type": headers["content-type"] },
-    body: file,
-  });
-  if (!res.ok) throw new Error(`Beleg-Upload fehlgeschlagen: ${res.status}`);
+  }>(`/api/incoming-invoices/${id}/receipt-url`, "POST", meta);
+  await put(url, headers["content-type"]);
   // Confirmed upload: the server deletes the receipt it replaced.
   await api(`/api/incoming-invoices/${id}/receipt`, "POST", {
     s3_key: invoice.s3_key,
   });
 }
+
+/** Cloud only: attach a receipt the user picked. */
+export const uploadReceipt = (id: number, file: File) =>
+  attachReceipt(
+    id,
+    { content_type: file.type, size: file.size, file_name: file.name },
+    async (url, contentType) =>
+      // Raw-body IPC (see src/lib/fs.ts): bytes as the body, args in a header.
+      invoke("put_presigned_url", new Uint8Array(await file.arrayBuffer()), {
+        headers: {
+          "x-bookie-args": encodeURIComponent(
+            JSON.stringify({ url, contentType }),
+          ),
+        },
+      }),
+  );
 
 /** Cloud only: the receipt bytes via a short-lived presigned GET. */
 export async function downloadReceipt(id: number): Promise<Uint8Array> {

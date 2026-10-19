@@ -24,8 +24,11 @@ use tracing_subscriber::{
 };
 
 const DB_URL: &str = "sqlite:bookie.db";
-const KEYRING_SERVICE: &str = "com.ranelkarimov.bookie";
+const KEYRING_SERVICE: &str = "com.logscale.bookie";
 const KEYRING_USER: &str = "s3_credentials";
+/// Bundle identifier and keyring service up to v0.1.7. Its data dirs and
+/// keyring entries move over once at boot (`legacy_id_plugin`).
+const LEGACY_ID: &str = "com.ranelkarimov.bookie";
 
 /// OBS-3.a: highest migration version this build of Bookie expects in
 /// `_sqlx_migrations`. Must match the highest `NNNN` directory under
@@ -659,6 +662,31 @@ mod boot_check_tests {
     }
 
     #[test]
+    fn move_legacy_dir_moves_once_and_never_overwrites() {
+        let root = unique_dir("legacy");
+        let legacy = root.join(crate::LEGACY_ID);
+        let dir = root.join(crate::KEYRING_SERVICE);
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("bookie.db"), b"old").unwrap();
+        // An empty new dir (created by someone else first) still gets replaced.
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert!(crate::move_legacy_dir(&dir).unwrap());
+        assert_eq!(std::fs::read(dir.join("bookie.db")).unwrap(), b"old");
+        assert!(!legacy.exists());
+        assert!(
+            !crate::move_legacy_dir(&dir).unwrap(),
+            "nothing left to move"
+        );
+
+        // A non-empty new dir is never touched.
+        std::fs::create_dir_all(&legacy).unwrap();
+        assert!(!crate::move_legacy_dir(&dir).unwrap());
+        assert_eq!(std::fs::read(dir.join("bookie.db")).unwrap(), b"old");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn probe_app_data_dir_creates_missing_directory_and_succeeds() {
         let dir = unique_dir("missing");
         // Directory does NOT exist yet — probe must create it and still
@@ -768,7 +796,7 @@ mod boot_check_tests {
         // returns a well-formed BootCheck without panicking and that
         // the variant is one of the two expected shapes.
         let result = probe_keyring(
-            "com.ranelkarimov.bookie.test_probe",
+            "com.logscale.bookie.test_probe",
             "ops1a_unit_test_user_does_not_exist",
         );
         match result {
@@ -2140,6 +2168,129 @@ async fn s3_upload_bytes(
         }
 
         Ok(key)
+    })
+    .await
+}
+
+/// Only signed S3 URLs over TLS: the webview cannot use the presigned PUTs as a generic PUT.
+fn require_presigned(url: &str) -> Result<(), BookieError> {
+    let signed = url::Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "https" && u.query_pairs().any(|(k, _)| k == "X-Amz-Signature")
+    });
+    if signed {
+        Ok(())
+    } else {
+        Err(BookieError::IoError {
+            message: "not a presigned https URL".to_string(),
+        })
+    }
+}
+
+/// Where a local receipt lives: the user's own S3 bucket or a file on disk.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum ReceiptSource {
+    S3 { config: S3Config, key: String },
+    File { path: String },
+}
+
+fn receipt_error(e: impl std::fmt::Display) -> BookieError {
+    error!("receipt transfer failed: {e}");
+    BookieError::S3Unreachable
+}
+
+/// Size of a local receipt, so the cloud upload can be presigned and the
+/// transfer budgeted before any byte is read.
+#[tauri::command]
+async fn receipt_size(source: ReceiptSource) -> Result<u64, BookieError> {
+    run_blocking(move || match source {
+        ReceiptSource::S3 { config, key } => {
+            let client = config.build_client()?;
+            with_retry(|| client.head_object_size(&key), RetryPolicy::s3_default())
+                .map_err(receipt_error)
+        }
+        ReceiptSource::File { path } => {
+            fs::metadata(&path)
+                .map(|m| m.len())
+                .map_err(|e| BookieError::IoError {
+                    message: format!("Failed to read file: {e}"),
+                })
+        }
+    })
+    .await
+}
+
+/// Local receipt → bookie Cloud presigned PUT, entirely in Rust: streamed from
+/// the source (`size` bytes, from `receipt_size`) into the upload, so RAM use is
+/// a few buffers whatever the file size, nothing touches the disk and no byte
+/// crosses the IPC boundary.
+#[tauri::command]
+async fn copy_receipt(
+    source: ReceiptSource,
+    size: u64,
+    url: String,
+    content_type: String,
+) -> Result<(), BookieError> {
+    require_presigned(&url)?;
+    run_blocking(move || match source {
+        ReceiptSource::S3 { config, key } => {
+            let client = config.build_client()?;
+            with_retry(
+                || client.copy_to_presigned(&key, size, &url, &content_type),
+                RetryPolicy::s3_default(),
+            )
+            .map_err(receipt_error)
+        }
+        ReceiptSource::File { path } => with_retry(
+            || {
+                let mut file = fs::File::open(&path)
+                    .map_err(|e| s3::S3Error::Transport(format!("open: {e}")))?;
+                S3Client::put_presigned_stream(&url, &mut file, size, &content_type)
+            },
+            RetryPolicy::s3_default(),
+        )
+        .map_err(receipt_error),
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PresignedPutArgs {
+    url: String,
+    content_type: String,
+}
+
+/// Raw-body IPC like `s3_upload_file`: PUTs the bytes to a bookie Cloud
+/// presigned URL from Rust, so the cloud bucket needs no CORS rule.
+#[tauri::command]
+async fn put_presigned_url(request: tauri::ipc::Request<'_>) -> Result<(), BookieError> {
+    let args: PresignedPutArgs = request
+        .headers()
+        .get("x-bookie-args")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            serde_json::from_str(&percent_encoding::percent_decode_str(v).decode_utf8_lossy()).ok()
+        })
+        .ok_or_else(|| BookieError::IoError {
+            message: "put_presigned_url: missing or invalid x-bookie-args header".to_string(),
+        })?;
+    require_presigned(&args.url)?;
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err(BookieError::IoError {
+            message: "put_presigned_url: expected raw body".to_string(),
+        });
+    };
+    let data = data.clone();
+    run_blocking(move || {
+        with_retry(
+            || S3Client::put_presigned(&args.url, &data, &args.content_type),
+            RetryPolicy::s3_default(),
+        )
+        .map_err(|e| {
+            error!("presigned PUT failed: {e}");
+            BookieError::S3Unreachable
+        })
     })
     .await
 }
@@ -3690,6 +3841,73 @@ mod panic_hook_tests {
     }
 }
 
+/// Moves the sibling `<LEGACY_ID>` directory to `dir` unless `dir` already
+/// holds something. A rename, so `bookie.db` and its WAL move together.
+fn move_legacy_dir(dir: &Path) -> std::io::Result<bool> {
+    let legacy = dir.with_file_name(LEGACY_ID);
+    if !legacy.is_dir() {
+        return Ok(false);
+    }
+    if dir.exists() {
+        if fs::read_dir(dir)?.next().is_some() {
+            return Ok(false);
+        }
+        fs::remove_dir(dir)?;
+    }
+    fs::rename(&legacy, dir)?;
+    Ok(true)
+}
+
+/// Copies a keyring entry from `LEGACY_ID` to `KEYRING_SERVICE` if only the
+/// old one exists, then deletes the old one.
+fn move_legacy_keyring_entry(user: &str) -> Result<(), keyring_core::error::Error> {
+    let new = keyring_core::Entry::new(KEYRING_SERVICE, user)?;
+    if !matches!(new.get_password(), Err(keyring_core::error::Error::NoEntry)) {
+        return Ok(());
+    }
+    let old = keyring_core::Entry::new(LEGACY_ID, user)?;
+    match old.get_password() {
+        Ok(secret) => {
+            new.set_password(&secret)?;
+            old.delete_credential()
+        }
+        Err(keyring_core::error::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Moves data of installs from before the identifier change. A plugin so it
+/// runs before tauri-plugin-sql preloads `bookie.db` in its own setup; the
+/// tracing subscriber is not up yet, hence `eprintln!`.
+fn legacy_id_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("legacy-id")
+        .setup(|app, _api| {
+            let path = app.path();
+            // macOS/Windows share config and data dirs; the second rename is a no-op.
+            for dir in [
+                path.app_config_dir(),
+                path.app_data_dir(),
+                path.app_local_data_dir(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                match move_legacy_dir(&dir) {
+                    Ok(true) => eprintln!("moved legacy data dir to {}", dir.display()),
+                    Ok(false) => {}
+                    Err(e) => eprintln!("failed to move legacy data dir to {}: {e}", dir.display()),
+                }
+            }
+            for user in [KEYRING_USER, KEYRING_CLOUD_USER] {
+                if let Err(e) = move_legacy_keyring_entry(user) {
+                    eprintln!("failed to move legacy keyring entry {user}: {e}");
+                }
+            }
+            Ok(())
+        })
+        .build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Replace Tauri's default tokio runtime (worker threads = CPU count,
@@ -3742,6 +3960,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(legacy_id_plugin())
         .plugin(
             tauri_plugin_sql::Builder::new()
                 .add_migrations(DB_URL, app_migrations())
@@ -3818,6 +4037,9 @@ pub fn run() {
             restore_db_backup,
             s3_delete_file,
             s3_presign_download_url,
+            put_presigned_url,
+            receipt_size,
+            copy_receipt,
             store_s3_credentials,
             get_s3_credentials,
             get_cloud_token,

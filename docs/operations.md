@@ -23,9 +23,9 @@ die Kopien im S3-Speicher.
 
 | Betriebssystem | Pfad                                                                    |
 | -------------- | ----------------------------------------------------------------------- |
-| Windows        | `C:\Users\<Benutzer>\AppData\Roaming\com.ranelkarimov.bookie\bookie.db` |
-| macOS          | `~/Library/Application Support/com.ranelkarimov.bookie/bookie.db`       |
-| Linux          | `~/.local/share/com.ranelkarimov.bookie/bookie.db`                      |
+| Windows        | `C:\Users\<Benutzer>\AppData\Roaming\com.logscale.bookie\bookie.db` |
+| macOS          | `~/Library/Application Support/com.logscale.bookie/bookie.db`       |
+| Linux          | `~/.local/share/com.logscale.bookie/bookie.db`                      |
 
 Neben `bookie.db` können temporäre SQLite-Dateien `bookie.db-wal` und
 `bookie.db-shm` im selben Ordner liegen. Diese gehören zur laufenden
@@ -35,21 +35,21 @@ Datenbank und dürfen nicht einzeln kopiert oder gelöscht werden.
 
 | Betriebssystem | Pfad                                                              |
 | -------------- | ----------------------------------------------------------------- |
-| Windows        | `C:\Users\<Benutzer>\AppData\Local\com.ranelkarimov.bookie\logs\` |
-| macOS          | `~/Library/Logs/com.ranelkarimov.bookie/`                         |
-| Linux          | `~/.local/share/com.ranelkarimov.bookie/logs/`                    |
+| Windows        | `C:\Users\<Benutzer>\AppData\Local\com.logscale.bookie\logs\` |
+| macOS          | `~/Library/Logs/com.logscale.bookie/`                         |
+| Linux          | `~/.local/share/com.logscale.bookie/logs/`                    |
 
 Die Log-Dateien heißen `bookie.<JJJJ-MM-TT>.log`. Es werden die letzten
 14 Tage aufbewahrt, ältere Dateien werden automatisch gelöscht.
 
 ### Ordner schnell öffnen
 
-- Windows: Drücken Sie `Win + R`, geben Sie `%APPDATA%\com.ranelkarimov.bookie`
+- Windows: Drücken Sie `Win + R`, geben Sie `%APPDATA%\com.logscale.bookie`
   ein und bestätigen Sie.
 - macOS: Im Finder `Cmd + Umschalt + G`, dann
-  `~/Library/Application Support/com.ranelkarimov.bookie` einfügen.
+  `~/Library/Application Support/com.logscale.bookie` einfügen.
 - Linux: Im Dateimanager Strg + L, dann
-  `~/.local/share/com.ranelkarimov.bookie` einfügen.
+  `~/.local/share/com.logscale.bookie` einfügen.
 
 ---
 
@@ -144,7 +144,7 @@ macOS Keychain, Linux Secret Service / GNOME Keyring).
    unverändert.
 4. Klicken Sie auf **Änderungen speichern**. Bookie schreibt das neue
    Schlüsselpaar in den Schlüsselbund und überschreibt den alten
-   Eintrag (Service `com.ranelkarimov.bookie`, Account
+   Eintrag (Service `com.logscale.bookie`, Account
    `s3_credentials`).
 5. Klicken Sie auf **Verbindung testen**. Wenn dort
    „Verbindung erfolgreich hergestellt.“ erscheint, ist die Rotation
@@ -251,7 +251,7 @@ Lösung:
    Schlüsselbundverwaltung; Linux: Seahorse / Passwörter und
    Schlüssel).
 2. Suchen Sie den Eintrag mit dem Service-Namen
-   `com.ranelkarimov.bookie` und dem Account `s3_credentials`.
+   `com.logscale.bookie` und dem Account `s3_credentials`.
 3. Löschen Sie den Eintrag.
 4. Starten Sie Bookie neu, gehen Sie zu **Einstellungen → S3-Speicher**
    und geben Sie Access Key und Secret Key erneut ein.

@@ -99,7 +99,7 @@ fn probe_keyring_returns_well_formed_bootcheck() {
     // shape. We accept Ok (backend reachable, even on NoEntry) or
     // Failed { KeyringUnavailable } (backend not reachable).
     let result = probe_keyring(
-        "com.ranelkarimov.bookie.test_probe_integration",
+        "com.logscale.bookie.test_probe_integration",
         "ops1a_integration_user_does_not_exist",
     );
     match result {

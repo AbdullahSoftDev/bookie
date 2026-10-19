@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/state';
 	import { t } from '$lib/i18n';
+	import CloudWorkContext from '../../common/CloudWorkContext.svelte';
 
 	let { children }: { children: Snippet } = $props();
 
@@ -16,6 +17,8 @@
 		<h1 class="text-2xl font-semibold tracking-tight">{t('timeTracking.title')}</h1>
 		<p class="text-sm text-zinc-600 dark:text-zinc-300">{t('timeTracking.subtitle')}</p>
 	</header>
+
+	<CloudWorkContext />
 
 	<nav class="flex flex-wrap gap-2">
 		{#each navItems as item}

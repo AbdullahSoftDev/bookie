@@ -454,7 +454,11 @@ test.skipIf(!has)(
         end_date: "2026-12-31",
       });
       const [r] = await rec.listRecurring();
-      expect(r).toMatchObject({ id, label: "Büro", next_run_date: "2026-01-31" });
+      expect(r).toMatchObject({
+        id,
+        label: "Büro",
+        next_run_date: "2026-01-31",
+      });
       expect(JSON.parse(r!.payload)).toMatchObject({ net_cents: 100000 });
 
       expect(await runDue(sdb, "2026-03-01")).toBe(2); // Jan 31, Feb 28
@@ -464,6 +468,102 @@ test.skipIf(!has)(
       expect(await runDue(sdb, "2026-06-01")).toBe(0);
       await rec.deleteRecurring(id);
       expect(await rec.listRecurring()).toEqual([]);
+    } finally {
+      server.stop(true);
+    }
+  },
+);
+
+test.skipIf(!has)(
+  "subcontractor hours at a client mirror into the own company and invoice at the own rate",
+  async () => {
+    const team = await import("$lib/team");
+    const te = await import("$lib/db/time-entries");
+    const { createInvoiceFromTimeEntries } = await import("$lib/db/invoices");
+    const sdb = await testDb();
+    const server = startServer(sdb, 0);
+    const one = async (q: Promise<any[]>) => Number((await q)[0].id);
+    const client = await one(
+      sdb.sql`INSERT INTO companies (name, subscription_status) VALUES ('AG', 'active') RETURNING id`,
+    );
+    const own = await one(
+      sdb.sql`INSERT INTO companies (name, subscription_status) VALUES ('SU', 'active') RETURNING id`,
+    );
+    const ag = await one(
+      sdb.sql`INSERT INTO users (email, name, password_hash) VALUES ('ag@x.de', 'AG', ${await hashPassword("x")}) RETURNING id`,
+    );
+    const su = await one(
+      sdb.sql`INSERT INTO users (email, name, password_hash) VALUES ('su@x.de', 'SU', ${await hashPassword("x")}) RETURNING id`,
+    );
+    await sdb.sql`INSERT INTO company_members (company_id, user_id, role) VALUES (${client}, ${ag}, 'admin'), (${own}, ${su}, 'admin')`;
+    await sdb.sql`INSERT INTO company_members (company_id, user_id, role, cost_rate_cents) VALUES (${client}, ${su}, 'subcontractor', 4000)`;
+    const cp = await one(
+      sdb.sql`INSERT INTO projects (company_id, name, hourly_rate_cents) VALUES (${client}, 'Relaunch', 12000) RETURNING id`,
+    );
+    await sdb.sql`INSERT INTO project_assignments (company_id, project_id, user_id) VALUES (${client}, ${cp}, ${su})`;
+    const oc = await one(
+      sdb.sql`INSERT INTO customers (company_id, name) VALUES (${own}, 'AG') RETURNING id`,
+    );
+    const op = await one(
+      sdb.sql`INSERT INTO projects (company_id, customer_id, name, hourly_rate_cents) VALUES (${own}, ${oc}, 'AG Relaunch', 7000) RETURNING id`,
+    );
+    const agToken = await createSession(sdb, ag);
+    const ownToken = await createSession(sdb, su); // admin company first
+    const atClient = await createSession(sdb, su);
+    let token = atClient;
+    (globalThis as any).localStorage = {
+      getItem: () =>
+        JSON.stringify({ url: server.url.origin, token, email: "e" }),
+      removeItem() {},
+    };
+    try {
+      const { api } = await import("$lib/cloud");
+      await api("/session/company", "POST", { companyId: client });
+      const [onClient] = await team.myAssignments();
+      expect(onClient).toMatchObject({
+        project_id: cp,
+        linked_project_id: null,
+      });
+      const id = await te.createTimeEntry({
+        company_id: 0,
+        customer_id: null,
+        project_id: cp,
+        entry_date: "2026-10-05",
+        started_at: null,
+        ended_at: null,
+        duration_minutes: 90,
+        description: "Design",
+        billable: 1,
+      });
+
+      token = ownToken;
+      expect((await team.linkProject(cp, op)).mirrored).toBe(1);
+      const [mirror] = (await te.listTimeEntries(0)).rows;
+      expect(mirror).toMatchObject({
+        source_entry_id: id,
+        project_id: op,
+        customer_id: oc,
+        duration_minutes: 90,
+      });
+      await expect(
+        te.updateTimeEntry(mirror!.id, { duration_minutes: 1 }),
+      ).rejects.toMatchObject({ code: "locked" });
+      await expect(
+        createInvoiceFromTimeEntries({ customer_id: oc }),
+      ).rejects.toMatchObject({ code: "no_entries" });
+
+      token = agToken;
+      expect((await team.approveMonth(su, "2026-10")).approved).toBe(1);
+
+      token = ownToken;
+      const invId = await createInvoiceFromTimeEntries({ customer_id: oc });
+      const [item] =
+        await sdb.sql`SELECT quantity, unit_price_net_cents, time_entry_id FROM invoice_items WHERE invoice_id = ${invId}`;
+      expect([
+        Number(item.quantity),
+        Number(item.unit_price_net_cents),
+        Number(item.time_entry_id),
+      ]).toEqual([1.5, 7000, mirror!.id]);
     } finally {
       server.stop(true);
     }

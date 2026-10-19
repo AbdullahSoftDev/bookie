@@ -5,7 +5,7 @@
 	import Security from './Security.svelte';
 	import { api, cloud, CloudError, keyringError, login, logout, publicApi, savedAccount, type Me } from '$lib/cloud';
 	import { messageForUnknown } from '$lib/shared/errors';
-	import { countsOf, pushImport, pushOrganization, readLocalImport, SKIPPED } from '$lib/cloud-import';
+	import { countsOf, pushImport, pushOrganization, pushReceipts, readLocalImport, SKIPPED, type ReceiptProgress } from '$lib/cloud-import';
 
 	const MESSAGES: Record<string, string> = {
 		invalid_credentials: 'E-Mail oder Passwort falsch.',
@@ -50,7 +50,13 @@
 		if (session) await run(loadMe);
 	});
 
-	const loadMe = async () => (me = await api<Me>('/me'));
+	const loadMe = async () => {
+		me = await api<Me>('/me');
+		const a = me.companies.find((c) => c.id === me?.activeCompanyId);
+		// Switching to the cloud moves the local data along: automatically into the first
+		// paid company this device administers (the button covers any further company).
+		if (a?.role === 'admin' && a.paid && !imported.length) await importLocal(a, true);
+	};
 
 	async function run(fn: () => Promise<unknown>) {
 		busy = true;
@@ -72,6 +78,9 @@
 				needsCode = true;
 				return;
 			}
+			// A fresh sign-in always offers the import again (ids of another server
+			// must not suppress it); the server refuses a non-empty company anyway.
+			localStorage.removeItem(IMPORTED);
 			location.reload();
 		});
 
@@ -113,6 +122,7 @@
 		run(async () => openUrl((await api<{ url: string }>(path, 'POST', {})).url));
 
 	// Local → cloud import, offered once per cloud company (admin, paid).
+	// shortcut: "already imported" is per device and reset on every sign-in, so a second device auto-imports into the next empty paid company; move it to the server if users run several devices.
 	const IMPORTED = 'bookie.cloud.imported';
 	const readImported = (): number[] => {
 		try {
@@ -131,30 +141,46 @@
 		}
 	};
 
-	const transfer = (target: { id: number; name: string }) =>
-		run(async () => {
-			const doc = await readLocalImport();
-			const c = countsOf(doc);
-			const text =
-				`Einmalig in die Cloud-Firma „${target.name}“ übertragen:\n` +
-				`${c.customers} Kunden, ${c.projects} Projekte, ${c.time_entries} Zeiteinträge, ` +
-				`${c.invoices} Rechnungen, ${c.incoming_invoices} Eingangsrechnungen, ${c.recurring_entries} wiederkehrende Buchungen, ` +
-				`${c.vat_taxes} MwSt-Sätze, Firmenstammdaten und die Rechnungseinstellungen.\n\n` +
-				'Nur in eine leere Cloud-Firma möglich und nicht wiederholbar. Ausgestellte Rechnungen ' +
-				'behalten Nummer und Beträge; Zeiteinträge werden dir zugeordnet und sind nicht freigegeben. ' +
-				'Die lokale Datei bleibt unverändert.\n\n' +
-				`Nicht übertragen:\n- ${SKIPPED.join('\n- ')}`;
-			if (!confirm(text)) return;
-			try {
-				const r = await pushImport(doc);
-				await pushOrganization();
-				notice = `Übertragen: ${r.customers} Kunden, ${r.projects} Projekte, ${r.time_entries} Zeiteinträge, ${r.invoices} Rechnungen, ${r.incoming_invoices} Eingangsrechnungen, ${r.recurring_entries} wiederkehrende Buchungen.`;
-			} catch (e) {
-				if (!(e instanceof CloudError && e.code === 'company_not_empty')) throw e;
-				error = message(e);
-			}
-			markImported(target.id);
-		});
+	async function importLocal(target: { id: number; name: string }, auto: boolean) {
+		const doc = await readLocalImport();
+		const c = countsOf(doc);
+		const { vat_taxes, ...data } = c; // VAT rates are seeded locally, they alone are no data
+		if (auto && !Object.values(data).some(Boolean)) return;
+		const text =
+			`Einmalig in die Cloud-Firma „${target.name}“ übertragen:\n` +
+			`${c.customers} Kunden, ${c.projects} Projekte, ${c.time_entries} Zeiteinträge, ` +
+			`${c.invoices} Rechnungen, ${c.incoming_invoices} Eingangsrechnungen, ${c.recurring_entries} wiederkehrende Buchungen, ` +
+			`${c.vat_taxes} MwSt-Sätze, Firmenstammdaten und die Rechnungseinstellungen.\n\n` +
+			'Nur in eine leere Cloud-Firma möglich und nicht wiederholbar. Ausgestellte Rechnungen ' +
+			'behalten Nummer und Beträge; Zeiteinträge werden dir zugeordnet und sind nicht freigegeben. ' +
+			'Die lokale Datei bleibt unverändert.\n\n' +
+			`Nicht übertragen:\n- ${SKIPPED.join('\n- ')}`;
+		if (!auto && !confirm(text)) return;
+		try {
+			const r = await pushImport(doc);
+			await pushOrganization();
+			notice = `Lokale Daten übertragen: ${r.customers} Kunden, ${r.projects} Projekte, ${r.time_entries} Zeiteinträge, ${r.invoices} Rechnungen, ${r.incoming_invoices} Eingangsrechnungen, ${r.recurring_entries} wiederkehrende Buchungen. Nicht übertragen: ${SKIPPED.join(', ')}.`;
+			await transferReceipts().catch((e) => (error = message(e))); // the import itself went through
+		} catch (e) {
+			const filled = e instanceof CloudError && e.code === 'company_not_empty';
+			// Auto: a failure must not block loading /me; the button stays for a retry.
+			if (auto && !filled) return void (error = message(e));
+			if (!filled) throw e;
+			if (!auto) error = message(e);
+		}
+		markImported(target.id);
+	}
+
+	const transfer = (target: { id: number; name: string }) => run(() => importLocal(target, false));
+
+	// Receipt files after the import; repeatable, it only fills cloud rows without a receipt.
+	let progress = $state<ReceiptProgress | null>(null);
+	async function transferReceipts() {
+		const r = await pushReceipts((p) => (progress = p)).finally(() => (progress = null));
+		const done = `${r.done} Belegdateien übertragen.`;
+		notice = notice ? `${notice} ${done}` : done;
+		if (r.failed.length) error = `Nicht übertragen (bitte von Hand anhängen):\n${r.failed.join('\n')}`;
+	}
 
 	// Back from the Stripe page in the browser: pick up the new subscription status.
 	const onFocus = () => {
@@ -270,6 +296,17 @@
 					Status aktualisieren
 				</button>
 			</div>
+			{#if active.role === 'admin' && active.paid && imported.includes(active.id)}
+				<div class="space-y-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">
+					<p class="text-sm text-zinc-500 dark:text-zinc-400">
+						Belegdateien der übertragenen Eingangsrechnungen (lokaler S3-Speicher oder Festplatte)
+						an die Cloud-Einträge anhängen, die noch keinen Beleg haben.
+					</p>
+					<button class="btn-secondary" onclick={() => run(transferReceipts)} disabled={busy}>
+						Belege übertragen
+					</button>
+				</div>
+			{/if}
 			{#if active.role === 'admin' && active.paid && !imported.includes(active.id)}
 				<div class="space-y-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">
 					<h3 class="text-sm font-semibold">Lokale Daten in die Cloud übertragen</h3>
@@ -287,6 +324,14 @@
 		<button class="btn-secondary" onclick={signOut} disabled={busy}>Abmelden</button>
 	{/if}
 
+	{#if progress}
+		<div class="space-y-1">
+			<p class="text-xs">
+				Belege übertragen: {progress.done} / {progress.total}
+			</p>
+			<progress class="w-full" value={progress.done} max={progress.total || 1}></progress>
+		</div>
+	{/if}
 	{#if notice}<p class="text-xs text-green-600 dark:text-green-400">{notice}</p>{/if}
-	{#if error}<p class="text-xs text-red-600">{error}</p>{/if}
+	{#if error}<p class="whitespace-pre-line text-xs text-red-600">{error}</p>{/if}
 </section>

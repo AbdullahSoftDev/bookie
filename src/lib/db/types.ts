@@ -126,6 +126,8 @@ export interface TimeEntry {
   duration_minutes: number | null;
   description: string | null;
   billable: number;
+  /** Cloud: set = read-only copy of the caller's hours at a client. */
+  source_entry_id?: number | null;
   created_at: string;
   updated_at: string;
 }
