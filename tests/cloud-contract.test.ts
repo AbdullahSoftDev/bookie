@@ -49,6 +49,8 @@ test.skipIf(!has)(
     const [u] =
       await sdb.sql`INSERT INTO users (email, name, password_hash) VALUES ('p@x.de', 'U', ${await hashPassword("x")}) RETURNING id`;
     await sdb.sql`INSERT INTO companies (id, name, subscription_status) VALUES (1, 'C', 'active')`;
+    // Signup inserts this row; the server no longer creates it lazily.
+    await sdb.sql`INSERT INTO company_settings (company_id) VALUES (1)`;
     await sdb.sql`INSERT INTO company_members (company_id, user_id, role) VALUES (1, ${u.id}, 'admin')`;
     await ldb.execute(
       "INSERT INTO companies (id, name, country_code) VALUES (1, 'C', 'DE')",
@@ -185,6 +187,7 @@ test.skipIf(!has)(
       await db.sql`INSERT INTO users (email, name, password_hash) VALUES ('e2e@x.de', 'U', ${await hashPassword("x")}) RETURNING id`;
     const [c] =
       await db.sql`INSERT INTO companies (name, subscription_status) VALUES ('C', 'active') RETURNING id`;
+    await db.sql`INSERT INTO company_settings (company_id) VALUES (${c.id})`;
     await db.sql`INSERT INTO company_members (company_id, user_id, role) VALUES (${c.id}, ${u.id}, 'admin')`;
     const [s] =
       await db.sql`INSERT INTO customers (company_id, name, type) VALUES (${c.id}, 'Miete GmbH', 'lieferant') RETURNING id`;
