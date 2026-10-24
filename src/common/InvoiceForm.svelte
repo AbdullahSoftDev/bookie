@@ -388,24 +388,30 @@
 		}
 
 		const safeNumber = invoiceNumber.replace(/[^a-zA-Z0-9\-_]/g, '-');
-		const isXml = eInvoice?.format === 'xrechnung';
 		const filePath = await save({
 			title: t('invoiceForm.savePdf'),
-			defaultPath: `Rechnung-${safeNumber}.${isXml ? 'xml' : 'pdf'}`,
-			filters: isXml ? [{ name: 'XML', extensions: ['xml'] }] : [{ name: 'PDF', extensions: ['pdf'] }]
+			defaultPath: `Rechnung-${safeNumber}.pdf`,
+			filters: [{ name: 'PDF', extensions: ['pdf'] }]
 		});
 		if (!filePath) return;
 
 		pdfLoading = true;
 		try {
-			if (eInvoice) {
+			if (eInvoice?.format === 'zugferd') {
 				const { createEInvoice } = await import('$lib/einvoice/export');
-				const file = await createEInvoice(data, eInvoice.xml, eInvoice.format);
+				const file = await createEInvoice(data, eInvoice.xml, 'zugferd');
 				await writeBinaryFile(filePath, file.bytes);
 				if (file.warnings.length > 0) pdfSuccess = issueText(t('einvoice.warningsTitle'), file.warnings);
 			} else {
 				const pdfBytes = await (await import('$lib/pdf/invoice-pdf-writer')).createInvoicePdf(data);
 				await writeBinaryFile(filePath, pdfBytes);
+				if (eInvoice?.format === 'xrechnung') {
+					// XRechnung is XML-only: write the legal original next to the visual PDF.
+					const { createEInvoice } = await import('$lib/einvoice/export');
+					const file = await createEInvoice(data, eInvoice.xml, 'xrechnung');
+					await writeBinaryFile(filePath.replace(/\.pdf$/i, '') + '.xml', file.bytes);
+					if (file.warnings.length > 0) pdfSuccess = issueText(t('einvoice.warningsTitle'), file.warnings);
+				}
 			}
 		} catch (err) {
 			pdfError = `${t('invoiceForm.pdfError')}: ${messageForUnknown(err)}`;
